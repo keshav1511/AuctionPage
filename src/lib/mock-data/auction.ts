@@ -19,6 +19,15 @@ export const MOCK_RULES: AuctionRules = {
     { max: 1000000, step: 50000 },
     { max: 999999999, step: 100000 },
   ],
+  minimumSquadSize: 15,
+  minimumBasePrice: 25000,
+  categoryMinimumBasePrices: {
+    ICON: 200000,
+    PLATINUM: 100000,
+    GOLD: 50000,
+    SILVER: 25000,
+    EMERGING: 15000,
+  },
 };
 
 export const MOCK_RECENT_BIDS: Bid[] = [

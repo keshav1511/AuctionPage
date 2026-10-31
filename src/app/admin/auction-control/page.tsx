@@ -11,6 +11,7 @@ import { formatCurrency, formatRole, getCategoryBadgeColor } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
 import { useRealtimeAuction } from "@/lib/hooks/use-realtime-auction";
 import { calculateNextBid } from "@/lib/auction/slab-calculator";
+import { analyzeTeamBiddingEligibility, TeamPurseReserveAnalysis } from "@/lib/auction/purse-validator";
 import { Team, Player } from "@/types";
 import {
   Gavel,
@@ -30,6 +31,7 @@ export default function AuctionControlDesk() {
     session,
     teams: liveTeams,
     players: livePlayers,
+    rules: liveRules,
     isConnected,
     remainingSeconds,
     lastActionMessage,
@@ -72,6 +74,24 @@ export default function AuctionControlDesk() {
     currentPlayer.basePriceOverride || currentPlayer.basePrice
   );
 
+  // Authoritative purse reserve and bidding eligibility analysis for all franchises
+  const teamAnalyses = useMemo(() => {
+    const analysisMap: Record<string, TeamPurseReserveAnalysis> = {};
+    for (const team of liveTeams) {
+      const purchasedForTeam = livePlayers.filter(
+        (p) => p.status === "SOLD" && p.soldToTeamId === team.id
+      );
+      analysisMap[team.id] = analyzeTeamBiddingEligibility(team, {
+        rules: liveRules,
+        currentPlayer,
+        nextBidAmount: nextBid,
+        isCurrentLeadingTeam: session.currentLeadingTeamId === team.id,
+        allPurchasedPlayersForTeam: purchasedForTeam,
+      });
+    }
+    return analysisMap;
+  }, [liveTeams, livePlayers, liveRules, currentPlayer, nextBid, session.currentLeadingTeamId]);
+
   /**
    * Marks player UNSOLD and broadcasts
    */
@@ -96,13 +116,19 @@ export default function AuctionControlDesk() {
   const handleTeamBid = useCallback(
     async (targetTeam: Team, customAmount?: number) => {
       const bidAmount = customAmount || nextBid;
+      const analysis = teamAnalyses[targetTeam.id];
+      if (analysis && !analysis.isEligibleToBid) {
+        setLocalNotice(analysis.ineligibilityReason || "Team cannot place this bid");
+        setTimeout(() => setLocalNotice(null), 3500);
+        return;
+      }
       const res = await placeBid(targetTeam.id, bidAmount);
       if (!res.success) {
         setLocalNotice(res.error || "Bid could not be registered");
         setTimeout(() => setLocalNotice(null), 3500);
       }
     },
-    [nextBid, placeBid]
+    [nextBid, placeBid, teamAnalyses]
   );
 
   /**
@@ -357,54 +383,123 @@ export default function AuctionControlDesk() {
                 </span>
               </div>
 
-              {/* Franchise Cards Grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {/* Franchise Cards Grid with Dynamic Purse Reserve & Max Bid Validation */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
                 {liveTeams.map((t) => {
-                  const isLeader = session.currentLeadingTeamId === t.id;
-                  const remainingPurse = t.purse?.remainingAmount || 5000000;
+                  const analysis = teamAnalyses[t.id];
+                  const isLeader = analysis?.isCurrentLeader ?? (session.currentLeadingTeamId === t.id);
+                  const isEligible = analysis?.isEligibleToBid ?? true;
+                  const remainingPurse = analysis?.remainingPurse ?? (t.purse?.remainingAmount || 5000000);
+                  const playersPurchased = analysis?.playersPurchased ?? (t.squadCount || 0);
+                  const minimumSquadSize = analysis?.minimumSquadSize ?? (t.purse?.minPlayers || 15);
+                  const requiredReserve = analysis?.requiredReserve ?? 0;
+                  const maximumBidAllowed = analysis?.maximumBidAllowed ?? remainingPurse;
 
                   return (
-                    <button
+                    <div
                       key={t.id}
-                      onClick={() => handleTeamBid(t)}
-                      className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                      className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between ${
                         isLeader
-                          ? "border-emerald-600 bg-emerald-50/50 shadow-sm ring-1 ring-emerald-600"
-                          : "border-slate-200 bg-slate-50 hover:bg-slate-100 hover:border-slate-300"
+                          ? "border-emerald-600 bg-emerald-50/60 shadow-sm ring-1 ring-emerald-600"
+                          : !isEligible
+                          ? "border-slate-200 bg-slate-50/70 opacity-80"
+                          : "border-slate-200 bg-white hover:border-slate-300 shadow-sm"
                       }`}
                     >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
-                          {t.logoUrl ? (
-                            <img src={t.logoUrl} alt={t.name} className="w-full h-full object-cover" />
+                      <div>
+                        {/* Header: Logo & Badge */}
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
+                            {t.logoUrl ? (
+                              <img src={t.logoUrl} alt={t.name} className="w-full h-full object-cover" />
+                            ) : (
+                              <span className="font-bold text-[10px] text-slate-600">{t.shortCode}</span>
+                            )}
+                          </div>
+
+                          {isLeader ? (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-600 text-white tracking-wide">
+                              LEADER
+                            </span>
+                          ) : !isEligible ? (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-100 text-rose-700 border border-rose-200 tracking-wide">
+                              INELIGIBLE
+                            </span>
                           ) : (
-                            <span className="font-bold text-[10px] text-slate-600">{t.shortCode}</span>
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              ELIGIBLE
+                            </span>
                           )}
                         </div>
 
-                        {isLeader ? (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-600 text-white">
-                            LEADER
-                          </span>
+                        <h4 className="font-bold text-xs text-slate-900 truncate" title={t.name}>
+                          {t.name}
+                        </h4>
+
+                        {/* Purse & Squad Stats */}
+                        <div className="mt-2 space-y-1 text-[11px] font-mono">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-sans text-slate-500">Purse:</span>
+                            <span className="font-bold text-slate-900">
+                              {formatCurrency(remainingPurse, true)}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-sans text-slate-500">Squad:</span>
+                            <span className="text-slate-700">
+                              {playersPurchased}/{t.purse?.maxPlayers || 18}{" "}
+                              <span className="text-[9px] text-slate-400 font-sans">(Min {minimumSquadSize})</span>
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-sans text-slate-500">Reserve Req:</span>
+                            <span className="text-amber-700 font-semibold">
+                              {formatCurrency(requiredReserve, true)}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                            <span className="text-[10px] font-sans font-semibold text-slate-600">Max Bid:</span>
+                            <span className="font-bold text-emerald-700">
+                              {formatCurrency(maximumBidAllowed, true)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Action Button / Ineligibility Warning */}
+                      <div className="mt-3 pt-2 border-t border-slate-200/60">
+                        {isEligible ? (
+                          <button
+                            type="button"
+                            onClick={() => handleTeamBid(t)}
+                            className="w-full py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs flex items-center justify-between transition shadow-sm"
+                          >
+                            <span className="text-[10px] font-normal uppercase tracking-wider text-emerald-100">
+                              Bid Next
+                            </span>
+                            <span className="font-mono">{formatCurrency(nextBid, true)}</span>
+                          </button>
                         ) : (
-                          <span className="text-[10px] font-mono text-slate-400">
-                            {t.squadCount || 0}/{t.purse?.maxPlayers || 18}
-                          </span>
+                          <button
+                            type="button"
+                            disabled
+                            title={analysis?.ineligibilityReason}
+                            className="w-full py-1 px-1.5 rounded-lg bg-slate-100 text-slate-400 font-medium text-xs flex flex-col items-center justify-center cursor-not-allowed border border-slate-200/70"
+                          >
+                            <div className="flex items-center justify-between w-full">
+                              <span className="text-[10px] line-through">Bid {formatCurrency(nextBid, true)}</span>
+                              <span className="text-[8px] font-bold text-rose-600 uppercase">Blocked</span>
+                            </div>
+                            <span className="text-[8px] text-rose-600 truncate w-full text-left font-sans mt-0.5">
+                              {analysis?.ineligibilityReason || "Ineligible"}
+                            </span>
+                          </button>
                         )}
                       </div>
-
-                      <h4 className="font-bold text-xs text-slate-900 truncate">{t.name}</h4>
-                      <p className="font-mono text-[11px] font-semibold text-emerald-700 mt-0.5">
-                        {formatCurrency(remainingPurse, true)}
-                      </p>
-
-                      <div className="mt-2 pt-2 border-t border-slate-200/60 flex items-center justify-between text-[10px]">
-                        <span className="text-slate-400">Bid Next:</span>
-                        <span className="font-mono font-bold text-slate-900">
-                          {formatCurrency(nextBid, true)}
-                        </span>
-                      </div>
-                    </button>
+                    </div>
                   );
                 })}
               </div>

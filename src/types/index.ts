@@ -176,6 +176,9 @@ export interface AuctionRules {
   initialTimerSeconds: number;
   bidExtensionSeconds: number;
   timerDurationSeconds?: number;
+  minimumSquadSize?: number;
+  minimumBasePrice?: number;
+  categoryMinimumBasePrices?: Partial<Record<PlayerCategory, number>>;
 }
 
 export interface GoogleDriveFileRecord {

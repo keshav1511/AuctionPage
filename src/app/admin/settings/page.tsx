@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState } from "react";
 import { AdminNav } from "@/components/admin/admin-nav";
@@ -49,8 +49,9 @@ export default function AdminSettingsPage() {
 
   // Team Squad Limits & Purse Rules
   const [defaultPurse, setDefaultPurse] = useState<number>(5000000);
-  const [minSquadSize, setMinSquadSize] = useState<number>(15);
+  const [minSquadSize, setMinSquadSize] = useState<number>(auctionRules.minimumSquadSize || 15);
   const [maxSquadSize, setMaxSquadSize] = useState<number>(18);
+  const [minimumBasePrice, setMinimumBasePrice] = useState<number>(auctionRules.minimumBasePrice || 25000);
   const [maxIconLimit, setMaxIconLimit] = useState<number>(2);
   const [maxPlatLimit, setMaxPlatLimit] = useState<number>(4);
   const [minEmergingLimit, setMinEmergingLimit] = useState<number>(3);
@@ -111,6 +112,9 @@ export default function AdminSettingsPage() {
       goldBasePrice: categoryPrices.GOLD,
       silverBasePrice: categoryPrices.SILVER,
       emergingBasePrice: categoryPrices.EMERGING,
+      minimumSquadSize: minSquadSize,
+      minimumBasePrice: minimumBasePrice,
+      categoryMinimumBasePrices: categoryPrices,
       bidSlabRules: slabs,
     });
 
@@ -314,7 +318,7 @@ export default function AdminSettingsPage() {
                   <h3 className="text-sm font-bold text-slate-900">Franchise Purse & Squad Constraints</h3>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-xs font-semibold text-slate-700">Default Team Purse (₹)</label>
                     <Input
@@ -334,7 +338,18 @@ export default function AdminSettingsPage() {
                       onChange={(e) => setMinSquadSize(parseInt(e.target.value, 10) || 15)}
                       className="bg-white border-slate-300 font-mono text-xs"
                     />
-                    <p className="text-[11px] text-slate-500">Reserved funds check: (Min - Current - 1) × 25k</p>
+                    <p className="text-[11px] text-slate-500">Slots required to avoid disqualification</p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-700">Minimum Base Price (Floor ₹)</label>
+                    <Input
+                      type="number"
+                      value={minimumBasePrice}
+                      onChange={(e) => setMinimumBasePrice(parseInt(e.target.value, 10) || 1000)}
+                      className="bg-white border-slate-300 font-mono text-xs"
+                    />
+                    <p className="text-[11px] text-slate-500">Guaranteed reserve per remaining slot</p>
                   </div>
 
                   <div className="space-y-1.5">
@@ -347,6 +362,16 @@ export default function AdminSettingsPage() {
                     />
                     <p className="text-[11px] text-slate-500">Total player capacity per franchise</p>
                   </div>
+                </div>
+
+                <div className="p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-xl text-xs text-emerald-900 space-y-1">
+                  <span className="font-bold block">Dynamic Reserve Formula (Phase 5.3):</span>
+                  <p className="text-[11px] font-mono text-emerald-800">
+                    Remaining Reserve = max(0, MinSquad - Purchased - 1) × FloorPrice
+                  </p>
+                  <p className="text-[11px] font-mono text-emerald-800">
+                    Maximum Allowed Bid = max(0, RemainingPurse - RemainingReserve)
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-3 gap-3 pt-2">

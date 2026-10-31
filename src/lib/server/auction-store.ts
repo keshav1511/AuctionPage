@@ -19,6 +19,7 @@ import {
   executeSerializedAuctionAction,
 } from "@/lib/sheets/google-sheets-repository";
 import { AuctionStateRow, PurchaseRecord, AuditLogEntry } from "@/lib/sheets/tab-definitions";
+import { validateBidEligibility } from "@/lib/auction/purse-validator";
 
 export type AuctionActionType =
   | "PLACE_BID"
@@ -341,16 +342,27 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
           };
         }
 
-        // Validate squad reserve rules
-        const currentSquad = team.squadCount || 0;
-        const minPlayers = team.purse?.minPlayers || 15;
-        const minRequiredReserve = Math.max(0, minPlayers - currentSquad - 1) * 25000;
-        const remainingAmount = team.purse?.remainingAmount || 5000000;
+        // Authoritative Dynamic Minimum Purse Reserve & Maximum Bid Validation (Phase 5.3)
+        const currentPlayer = state.currentPlayerId
+          ? players.find((p) => p.id === state.currentPlayerId) || null
+          : null;
 
-        if (remainingAmount - amount < minRequiredReserve) {
+        // Accurate count of valid purchased players (unsold players strictly excluded)
+        const teamPurchasedPlayers = players.filter(
+          (p) => p.status === "SOLD" && p.soldToTeamId === team.id
+        );
+
+        const bidValidation = validateBidEligibility(team, amount, {
+          rules,
+          currentPlayer,
+          isCurrentLeadingTeam: state.currentLeadingTeamId === team.id,
+          allPurchasedPlayersForTeam: teamPurchasedPlayers,
+        });
+
+        if (!bidValidation.valid) {
           return {
             success: false,
-            error: `Purse Reserve Violation: ${team.name} must retain ₹${minRequiredReserve.toLocaleString()} for minimum squad spots`,
+            error: bidValidation.error || "Bid violates minimum purse reserve rules",
           };
         }
 
@@ -480,8 +492,12 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
             const newSpent = currentSpent + finalPrice;
             const newRemaining = (t.purse?.totalBudget || 5000000) - newSpent;
             const newSquadCount = (t.squadCount || 0) + 1;
-            const minPlayers = t.purse?.minPlayers || 15;
-            const reserved = Math.max(0, minPlayers - newSquadCount) * 25000;
+            const minPlayers = t.purse?.minPlayers || rules.minimumSquadSize || 15;
+            const minBasePrice =
+              rules.minimumBasePrice ||
+              (rules.categoryBasePrices?.SILVER ?? rules.silverBasePrice ?? 25000);
+            const remainingNeeded = Math.max(0, minPlayers - newSquadCount);
+            const reserved = remainingNeeded * minBasePrice;
 
             return {
               ...t,
