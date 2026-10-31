@@ -33,7 +33,6 @@ interface LeagueContextType {
 const LeagueContext = createContext<LeagueContextType | undefined>(undefined);
 
 const STORAGE_KEY = "ntl_auction_active_league_id";
-const LEAGUES_STORAGE_KEY = "ntl_auction_leagues_list";
 
 export function LeagueProvider({ children }: { children: ReactNode }) {
   const [leagues, setLeagues] = useState<League[]>(INITIAL_LEAGUES);
@@ -43,13 +42,9 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
   const [players, setPlayers] = useState<Player[]>(MOCK_PLAYERS);
   const [auctionRules, setAuctionRules] = useState<AuctionRules>(MOCK_RULES);
 
-  // Load leagues from local storage on client mount
+  // Load active league ID preference on mount
   useEffect(() => {
     try {
-      const storedLeagues = localStorage.getItem(LEAGUES_STORAGE_KEY);
-      if (storedLeagues) {
-        setLeagues(JSON.parse(storedLeagues));
-      }
       const storedId = localStorage.getItem(STORAGE_KEY);
       if (storedId) {
         setActiveLeagueId(storedId);
@@ -59,34 +54,37 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Sync teams, players, and rules whenever activeLeagueId changes
+  // Fetch authoritative state from server (backed by Google Sheets) whenever activeLeagueId changes
   useEffect(() => {
-    // 1. Initial local cache restore
-    try {
-      const storedTeams = localStorage.getItem(`ntl_teams_${activeLeagueId}`);
-      if (storedTeams) setTeams(JSON.parse(storedTeams));
-      else setTeams(MOCK_TEAMS.map((t) => ({ ...t, seasonId: activeLeagueId })));
+    let isCancelled = false;
 
-      const storedPlayers = localStorage.getItem(`ntl_players_${activeLeagueId}`);
-      if (storedPlayers) setPlayers(JSON.parse(storedPlayers));
-      else setPlayers(MOCK_PLAYERS.map((p) => ({ ...p, seasonId: activeLeagueId })));
-
-      const storedRules = localStorage.getItem(`ntl_rules_${activeLeagueId}`);
-      if (storedRules) setAuctionRules(JSON.parse(storedRules));
-      else setAuctionRules({ ...MOCK_RULES, seasonId: activeLeagueId });
-    } catch {}
-
-    // 2. Fetch authoritative server state to ensure fresh cross-user synchronization
     fetch(`/api/auction/state?leagueId=${encodeURIComponent(activeLeagueId)}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (data) {
+        if (!isCancelled && data) {
           if (data.teams && Array.isArray(data.teams)) setTeams(data.teams);
           if (data.players && Array.isArray(data.players)) setPlayers(data.players);
           if (data.rules) setAuctionRules(data.rules);
+          if (data.league) {
+            setLeagues((prev) => {
+              const existingIdx = prev.findIndex((l) => l.id === data.league.id);
+              if (existingIdx >= 0) {
+                const next = [...prev];
+                next[existingIdx] = { ...next[existingIdx], ...data.league };
+                return next;
+              }
+              return [...prev, data.league];
+            });
+          }
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.warn("[LeagueContext] Failed to load server state:", err);
+      });
+
+    return () => {
+      isCancelled = true;
+    };
   }, [activeLeagueId]);
 
   const activeLeague = leagues.find((l) => l.id === activeLeagueId) || leagues[0];
@@ -130,9 +128,11 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
     setActiveLeagueId(id);
 
     try {
-      localStorage.setItem(LEAGUES_STORAGE_KEY, JSON.stringify(updated));
       localStorage.setItem(STORAGE_KEY, id);
     } catch {}
+
+    // Persist new league directly to Google Sheets
+    syncServer({ type: "UPDATE_LEAGUE", league: newLeague });
 
     return newLeague;
   };
@@ -150,9 +150,6 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
     });
 
     setLeagues(updated);
-    try {
-      localStorage.setItem(LEAGUES_STORAGE_KEY, JSON.stringify(updated));
-    } catch {}
     syncServer({ type: "UPDATE_LEAGUE", league: updates });
   };
 
@@ -161,7 +158,9 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ leagueId: activeLeagueId, ...payload }),
-    }).catch(() => {});
+    }).catch((err) => {
+      console.error("[LeagueContext] Server sync failure:", err);
+    });
   };
 
   const updateLeaguePalette = (leagueId: string, palette: BrandingPalette) => {
@@ -176,35 +175,23 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
   const addTeam = (team: Team) => {
     const updated = [...teams, team];
     setTeams(updated);
-    try {
-      localStorage.setItem(`ntl_teams_${activeLeagueId}`, JSON.stringify(updated));
-    } catch {}
     syncServer({ type: "UPDATE_TEAMS", teams: updated });
   };
 
   const updateTeam = (teamId: string, updates: Partial<Team>) => {
     const updated = teams.map((t) => (t.id === teamId ? { ...t, ...updates } : t));
     setTeams(updated);
-    try {
-      localStorage.setItem(`ntl_teams_${activeLeagueId}`, JSON.stringify(updated));
-    } catch {}
     syncServer({ type: "UPDATE_TEAMS", teams: updated });
   };
 
   const deleteTeam = (teamId: string) => {
     const updated = teams.filter((t) => t.id !== teamId);
     setTeams(updated);
-    try {
-      localStorage.setItem(`ntl_teams_${activeLeagueId}`, JSON.stringify(updated));
-    } catch {}
     syncServer({ type: "UPDATE_TEAMS", teams: updated });
   };
 
   const setTeamsForActiveLeague = (newTeams: Team[]) => {
     setTeams(newTeams);
-    try {
-      localStorage.setItem(`ntl_teams_${activeLeagueId}`, JSON.stringify(newTeams));
-    } catch {}
     syncServer({ type: "UPDATE_TEAMS", teams: newTeams });
   };
 
@@ -212,26 +199,17 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
   const addPlayers = (newPlayers: Player[]) => {
     const updated = [...players, ...newPlayers];
     setPlayers(updated);
-    try {
-      localStorage.setItem(`ntl_players_${activeLeagueId}`, JSON.stringify(updated));
-    } catch {}
     syncServer({ type: "UPDATE_PLAYERS", players: updated });
   };
 
   const updatePlayer = (playerId: string, updates: Partial<Player>) => {
     const updated = players.map((p) => (p.id === playerId ? { ...p, ...updates } : p));
     setPlayers(updated);
-    try {
-      localStorage.setItem(`ntl_players_${activeLeagueId}`, JSON.stringify(updated));
-    } catch {}
     syncServer({ type: "UPDATE_PLAYERS", players: updated });
   };
 
   const setPlayersForActiveLeague = (newPlayers: Player[]) => {
     setPlayers(newPlayers);
-    try {
-      localStorage.setItem(`ntl_players_${activeLeagueId}`, JSON.stringify(newPlayers));
-    } catch {}
     syncServer({ type: "UPDATE_PLAYERS", players: newPlayers });
   };
 
@@ -239,9 +217,6 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
   const updateAuctionRules = (rulesUpdates: Partial<AuctionRules>) => {
     const updated = { ...auctionRules, ...rulesUpdates };
     setAuctionRules(updated);
-    try {
-      localStorage.setItem(`ntl_rules_${activeLeagueId}`, JSON.stringify(updated));
-    } catch {}
     syncServer({ type: "UPDATE_RULES", rules: rulesUpdates });
   };
 

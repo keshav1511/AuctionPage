@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const leagueId = searchParams.get("leagueId") || "league-ntl";
 
-    const state = getAuthoritativeLeagueState(leagueId);
+    const state = await getAuthoritativeLeagueState(leagueId);
     if (!state) {
       return NextResponse.json(
         { success: false, error: `League with ID "${leagueId}" not found` },

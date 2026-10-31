@@ -1,3 +1,9 @@
+// ==============================================================================
+// NTL AUCTION PLATFORM - REAL-TIME AUCTION HOOK (GOOGLE SHEETS BACKED)
+// Client-side hook managing real-time auction synchronization via SSE & polling
+// Completely decoupled from Supabase; authoritative source of truth is Google Sheets
+// ==============================================================================
+
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -5,7 +11,6 @@ import { AuctionSession, Team, Player, AuctionRules } from "@/types";
 import { MOCK_AUCTION_SESSION, MOCK_RULES } from "@/lib/mock-data/auction";
 import { MOCK_TEAMS } from "@/lib/mock-data/teams";
 import { MOCK_PLAYERS } from "@/lib/mock-data/players";
-import { createClient } from "@/lib/supabase/client";
 
 export interface RealtimeAuctionState {
   session: AuctionSession;
@@ -42,7 +47,7 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
   const eventSourceRef = useRef<EventSource | null>(null);
 
   // 1. Fetch initial state on mount or when leagueId changes
-  const fetchInitialState = useCallback(async () => {
+  const fetchAuthoritativeState = useCallback(async () => {
     try {
       const res = await fetch(`/api/auction/state?leagueId=${encodeURIComponent(leagueId)}`);
       if (res.ok) {
@@ -53,90 +58,80 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
         if (data.rules) setRules(data.rules);
       }
     } catch (err) {
-      console.warn("Failed to fetch initial auction state:", err);
+      console.warn("[RealtimeAuction] Failed to fetch state from server:", err);
     }
   }, [leagueId]);
 
   useEffect(() => {
-    fetchInitialState();
-  }, [fetchInitialState]);
+    fetchAuthoritativeState();
+  }, [fetchAuthoritativeState]);
 
-  // 2. Real-time Subscription via SSE and Supabase Realtime
+  // 2. Real-time Subscription via SSE Stream with automatic reconnection
   useEffect(() => {
     let isSubscribed = true;
 
-    // Connect SSE Stream
-    const streamUrl = `/api/realtime/stream?leagueId=${encodeURIComponent(leagueId)}`;
-    const es = new EventSource(streamUrl);
-    eventSourceRef.current = es;
+    const connectSSE = () => {
+      const streamUrl = `/api/realtime/stream?leagueId=${encodeURIComponent(leagueId)}`;
+      const es = new EventSource(streamUrl);
+      eventSourceRef.current = es;
 
-    es.onopen = () => {
-      if (isSubscribed) {
-        setIsConnected(true);
-      }
-    };
-
-    es.onmessage = (event) => {
-      if (!isSubscribed) return;
-      try {
-        const data = JSON.parse(event.data);
-        if (data.session) setSession(data.session);
-        if (data.teams) setTeams(data.teams);
-        if (data.players) setPlayers(data.players);
-        if (data.rules) setRules(data.rules);
-
-        if (data.type === "LOT_SOLD") {
-          setIsHammered(true);
-        } else if (data.type === "LOT_CHANGED" || data.type === "BID_PLACED") {
-          setIsHammered(false);
+      es.onopen = () => {
+        if (isSubscribed) {
+          setIsConnected(true);
         }
+      };
 
-        if (data.lastAction?.message) {
-          setLastActionMessage(data.lastAction.message);
-          setTimeout(() => setLastActionMessage(null), 3500);
-        }
-      } catch (err) {
-        console.error("Error parsing realtime auction message:", err);
-      }
-    };
+      es.onmessage = (event) => {
+        if (!isSubscribed) return;
+        try {
+          const data = JSON.parse(event.data);
+          if (data.session) setSession(data.session);
+          if (data.teams) setTeams(data.teams);
+          if (data.players) setPlayers(data.players);
+          if (data.rules) setRules(data.rules);
 
-    es.onerror = () => {
-      if (isSubscribed) {
-        setIsConnected(false);
-      }
-    };
-
-    // Optional Supabase Realtime Channel
-    const supabase = createClient();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let channel: any = null;
-
-    if (supabase) {
-      channel = supabase
-        .channel(`auction-room-${leagueId}`)
-        .on(
-          "broadcast",
-          { event: "auction-update" },
-          (payload: { payload?: { session?: AuctionSession; teams?: Team[]; players?: Player[] } }) => {
-            if (!isSubscribed) return;
-            if (payload.payload?.session) setSession(payload.payload.session);
-            if (payload.payload?.teams) setTeams(payload.payload.teams);
-            if (payload.payload?.players) setPlayers(payload.payload.players);
+          if (data.type === "LOT_SOLD") {
+            setIsHammered(true);
+          } else if (data.type === "LOT_CHANGED" || data.type === "BID_PLACED") {
+            setIsHammered(false);
           }
-        )
-        .subscribe();
-    }
+
+          if (data.lastAction?.message) {
+            setLastActionMessage(data.lastAction.message);
+            setTimeout(() => setLastActionMessage(null), 3500);
+          }
+        } catch (err) {
+          console.error("[RealtimeAuction] Error parsing realtime event:", err);
+        }
+      };
+
+      es.onerror = () => {
+        if (isSubscribed) {
+          setIsConnected(false);
+        }
+      };
+    };
+
+    connectSSE();
+
+    // 3. Failsafe background polling (every 3.5s) ensuring synchronization
+    // even across multi-instance serverless deployments or temporary socket drops
+    const pollingFallback = setInterval(() => {
+      if (isSubscribed) {
+        fetchAuthoritativeState();
+      }
+    }, 3500);
 
     return () => {
       isSubscribed = false;
-      es.close();
-      if (channel && supabase) {
-        supabase.removeChannel(channel);
+      clearInterval(pollingFallback);
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
       }
     };
-  }, [leagueId]);
+  }, [leagueId, fetchAuthoritativeState]);
 
-  // 3. Authoritative countdown derived from session.timerExpiresAt
+  // 4. Authoritative countdown derived from session.timerExpiresAt
   useEffect(() => {
     if (session.status !== "IN_PROGRESS" || !session.timerExpiresAt) {
       if (session.status === "PAUSED") {
@@ -155,7 +150,7 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
     return () => clearInterval(interval);
   }, [session.timerExpiresAt, session.status, session.timerSeconds]);
 
-  // 4. Action Dispatchers
+  // 5. Action Dispatchers (send commands to server which commits to Google Sheets)
   const sendAction = useCallback(
     async (payload: Record<string, unknown>): Promise<{ success: boolean; error?: string }> => {
       try {

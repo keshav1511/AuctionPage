@@ -1,14 +1,24 @@
 // ==============================================================================
-// NTL AUCTION PLATFORM - AUTHORITATIVE SERVER AUCTION STORE
+// NTL AUCTION PLATFORM - AUTHORITATIVE SERVER AUCTION STORE (GOOGLE SHEETS BACKED)
 // Server-side authoritative state management with real-time event broadcasting
-// Integrates with Supabase when configured, provides synchronized state engine
+// Uses Google Sheets as the single source of truth for persistent data
 // ==============================================================================
 
 import { AuctionSession, Team, Player, AuctionRules, Bid, League } from "@/types";
-import { MOCK_TEAMS } from "@/lib/mock-data/teams";
-import { MOCK_PLAYERS } from "@/lib/mock-data/players";
-import { MOCK_RULES, MOCK_AUCTION_SESSION } from "@/lib/mock-data/auction";
 import { getInitialLeagueById } from "@/lib/mock-data/leagues";
+import {
+  getLeagueConfigFromSheets,
+  saveLeagueConfigToSheets,
+  getTeamsFromSheets,
+  saveTeamsToSheets,
+  getPlayersFromSheets,
+  savePlayersToSheets,
+  getAuctionStateFromSheets,
+  getRecentBidsFromSheets,
+  markLastBidUndoneInSheets,
+  executeSerializedAuctionAction,
+} from "@/lib/sheets/google-sheets-repository";
+import { AuctionStateRow, PurchaseRecord, AuditLogEntry } from "@/lib/sheets/tab-definitions";
 
 export type AuctionActionType =
   | "PLACE_BID"
@@ -66,96 +76,16 @@ export interface LeagueState {
 type EventListener = (event: AuctionRealtimeEvent) => void;
 
 interface StoreGlobalState {
-  leagues: Map<string, LeagueState>;
   listeners: Map<string, Set<EventListener>>;
 }
 
-// Global process singleton to persist across Next.js re-evaluations
-const globalState: StoreGlobalState = ((globalThis as unknown as Record<string, unknown>).__ntl_auction_store__ as StoreGlobalState) || {
-  leagues: new Map<string, LeagueState>(),
+// Global process singleton to persist SSE listeners across re-evaluations
+const globalState: StoreGlobalState = ((globalThis as unknown as Record<string, unknown>).__ntl_auction_listeners__ as StoreGlobalState) || {
   listeners: new Map<string, Set<EventListener>>(),
 };
 
 if (process.env.NODE_ENV !== "production") {
-  (globalThis as unknown as Record<string, unknown>).__ntl_auction_store__ = globalState;
-}
-
-/**
- * Registers or initializes a league with custom/new configuration
- */
-export function registerLeagueState(league: League): LeagueState {
-  if (!globalState.leagues.has(league.id)) {
-    const initialTeams = MOCK_TEAMS.map((t) => ({
-      ...t,
-      seasonId: league.id,
-    }));
-
-    const initialPlayers = MOCK_PLAYERS.map((p) => ({
-      ...p,
-      seasonId: league.id,
-    }));
-
-    const initialRules: AuctionRules = {
-      ...MOCK_RULES,
-      seasonId: league.id,
-      initialTimerSeconds: MOCK_RULES.initialTimerSeconds || 45,
-      bidExtensionSeconds: MOCK_RULES.bidExtensionSeconds || 10,
-    };
-
-    const firstPlayer = initialPlayers[0];
-    const initialSession: AuctionSession = {
-      ...MOCK_AUCTION_SESSION,
-      id: `auction-${league.id}`,
-      seasonId: league.id,
-      currentPlayerId: firstPlayer ? firstPlayer.id : null,
-      currentPlayer: firstPlayer || null,
-      currentHighestBid: 0,
-      currentLeadingTeamId: null,
-      currentLeadingTeam: null,
-      status: "IDLE",
-      timerSeconds: initialRules.initialTimerSeconds,
-      timerExpiresAt: new Date(Date.now() + initialRules.initialTimerSeconds * 1000).toISOString(),
-      round: 1,
-      bidCount: 0,
-      recentBids: [],
-    };
-
-    const newState: LeagueState = {
-      league,
-      session: initialSession,
-      teams: initialTeams,
-      players: initialPlayers,
-      rules: initialRules,
-    };
-
-    globalState.leagues.set(league.id, newState);
-    return newState;
-  }
-
-  const existingState = globalState.leagues.get(league.id)!;
-  existingState.league = { ...existingState.league, ...league };
-  return existingState;
-}
-
-/**
- * Retrieves authoritative state for a league.
- * Returns null if the league does not exist and is not configured in INITIAL_LEAGUES.
- */
-export function getAuthoritativeLeagueState(leagueId: string): LeagueState | null {
-  if (!leagueId || typeof leagueId !== "string") {
-    return null;
-  }
-
-  if (globalState.leagues.has(leagueId)) {
-    return globalState.leagues.get(leagueId)!;
-  }
-
-  const baseLeague = getInitialLeagueById(leagueId);
-  if (!baseLeague) {
-    return null;
-  }
-
-  return registerLeagueState(baseLeague);
+  (globalThis as unknown as Record<string, unknown>).__ntl_auction_listeners__ = globalState;
 }
 
 /**
@@ -180,7 +110,7 @@ export function subscribeToAuctionEvents(leagueId: string, listener: EventListen
 /**
  * Broadcasts an authoritative event to all subscribers
  */
-function broadcastEvent(event: AuctionRealtimeEvent) {
+export function broadcastEvent(event: AuctionRealtimeEvent) {
   const set = globalState.listeners.get(event.leagueId);
   if (set && set.size > 0) {
     set.forEach((listener) => {
@@ -194,508 +124,605 @@ function broadcastEvent(event: AuctionRealtimeEvent) {
 }
 
 /**
- * Processes an authoritative auction action on the server
+ * Maps raw sheets AuctionStateRow + entities into client-facing AuctionSession
  */
-export function processAuctionAction(payload: AuctionActionPayload): {
+function buildAuctionSession(
+  state: AuctionStateRow,
+  players: Player[],
+  teams: Team[],
+  recentBids: Bid[],
+  rules: AuctionRules
+): AuctionSession {
+  const currentPlayer = state.currentPlayerId
+    ? players.find((p) => p.id === state.currentPlayerId) || null
+    : null;
+
+  const currentLeadingTeam = state.currentLeadingTeamId
+    ? teams.find((t) => t.id === state.currentLeadingTeamId) || null
+    : null;
+
+  return {
+    id: state.id,
+    seasonId: state.seasonId,
+    currentPlayerId: state.currentPlayerId,
+    currentPlayer,
+    currentHighestBid: state.currentHighestBid || 0,
+    currentLeadingTeamId: state.currentLeadingTeamId,
+    currentLeadingTeam,
+    status: state.status,
+    timerSeconds: state.timerSeconds || rules.initialTimerSeconds || 45,
+    timerExpiresAt: state.timerExpiresAt,
+    bidExtensionSeconds: state.bidExtensionSeconds || rules.bidExtensionSeconds || 10,
+    round: state.round || 1,
+    bidCount: state.bidCount || 0,
+    recentBids,
+  };
+}
+
+/**
+ * Retrieves authoritative state for a league from Google Sheets
+ * Automatically checks and resolves expired lots with 0 bids to UNSOLD on the server
+ */
+export async function getAuthoritativeLeagueState(leagueId: string): Promise<LeagueState | null> {
+  if (!leagueId || typeof leagueId !== "string") {
+    return null;
+  }
+
+  const config = await getLeagueConfigFromSheets(leagueId);
+  if (!config.league || (!config.league.name && !getInitialLeagueById(leagueId))) {
+    return null;
+  }
+
+  const [stateRow, teams, players, recentBids] = await Promise.all([
+    getAuctionStateFromSheets(leagueId),
+    getTeamsFromSheets(leagueId),
+    getPlayersFromSheets(leagueId),
+    getRecentBidsFromSheets(leagueId, 20),
+  ]);
+
+  // Server-side wall-clock timer check: auto-resolve expired lot to UNSOLD
+  const now = Date.now();
+  const expiryTime = stateRow.timerExpiresAt ? new Date(stateRow.timerExpiresAt).getTime() : 0;
+
+  if (
+    stateRow.status === "IN_PROGRESS" &&
+    expiryTime > 0 &&
+    now >= expiryTime &&
+    stateRow.currentHighestBid === 0 &&
+    stateRow.currentPlayerId
+  ) {
+    // Automatically trigger server-side UNSOLD resolution
+    try {
+      await processAuctionAction({
+        leagueId,
+        type: "HAMMER_UNSOLD",
+        playerId: stateRow.currentPlayerId,
+        reason: "Timer expired with zero bids (Server-side auto hammer)",
+      });
+      // Re-fetch after auto-resolution
+      return getAuthoritativeLeagueState(leagueId);
+    } catch (err) {
+      console.error("[AuctionStore] Error during auto UNSOLD resolution:", err);
+    }
+  }
+
+  const session = buildAuctionSession(stateRow, players, teams, recentBids, config.rules);
+
+  return {
+    league: config.league,
+    rules: config.rules,
+    teams,
+    players,
+    session,
+    pausedRemainingSeconds: stateRow.pausedRemainingSeconds,
+  };
+}
+
+/**
+ * Processes an authoritative auction action on the server through Google Sheets serialized write lock
+ */
+export async function processAuctionAction(payload: AuctionActionPayload): Promise<{
   success: boolean;
   message?: string;
   error?: string;
   state?: LeagueState;
-} {
+}> {
   const { leagueId, type } = payload;
-  let state = getAuthoritativeLeagueState(leagueId);
-
-  // If league doesn't exist yet, check if action is UPDATE_LEAGUE with a valid league definition
-  if (!state) {
-    if (type === "UPDATE_LEAGUE" && payload.league && payload.league.name) {
-      const newLeague: League = {
-        id: leagueId,
-        slug: payload.league.slug || leagueId.replace(/^league-/, ""),
-        name: payload.league.name,
-        description: payload.league.description || "",
-        logoUrl: payload.league.logoUrl || "",
-        matchDate: payload.league.matchDate || new Date().toISOString().split("T")[0],
-        matchVenue: payload.league.matchVenue || "Venue TBD",
-        auctionDate: payload.league.auctionDate || new Date().toISOString().split("T")[0],
-        auctionTime: payload.league.auctionTime || "18:00",
-        timezone: payload.league.timezone || "Asia/Kolkata",
-        primaryColor: payload.league.primaryColor || "#059669",
-        secondaryColor: payload.league.secondaryColor || "#F59E0B",
-        ...payload.league,
-      };
-      state = registerLeagueState(newLeague);
-    } else {
-      return {
-        success: false,
-        error: `League with ID "${leagueId}" not found in authoritative auction store`,
-      };
-    }
-  }
-
   const nowIso = new Date().toISOString();
 
-  switch (type) {
-    case "PLACE_BID": {
-      const { teamId, amount } = payload;
-      if (!teamId || typeof amount !== "number" || amount <= 0) {
-        return { success: false, error: "Invalid team or bid amount", state };
-      }
+  // Handle UPDATE_LEAGUE directly if updating configuration
+  if (type === "UPDATE_LEAGUE" && payload.league) {
+    const config = await getLeagueConfigFromSheets(leagueId);
+    const updatedLeague: League = {
+      ...config.league,
+      ...payload.league,
+      id: leagueId,
+      name: payload.league.name || config.league.name || "Nalanda Turf League",
+      primaryColor: payload.league.primaryColor || config.league.primaryColor || "#059669",
+      secondaryColor: payload.league.secondaryColor || config.league.secondaryColor || "#F59E0B",
+    };
 
-      if (state.session.status === "PAUSED") {
-        return { success: false, error: "Auction is paused. Resume to accept bids.", state };
-      }
-
-      const team = state.teams.find((t) => t.id === teamId);
-      if (!team) {
-        return { success: false, error: "Target franchise not found", state };
-      }
-
-      const currentHighest = state.session.currentHighestBid || 0;
-      if (amount <= currentHighest && state.session.bidCount > 0) {
-        return {
-          success: false,
-          error: `Bid amount ₹${amount.toLocaleString()} must strictly exceed current highest bid ₹${currentHighest.toLocaleString()}`,
-          state,
-        };
-      }
-
-      // Check squad reserve limit
-      const currentSquad = team.squadCount || 0;
-      const minPlayers = team.purse?.minPlayers || 15;
-      const minRequiredReserve = Math.max(0, minPlayers - currentSquad - 1) * 25000;
-      const remainingAmount = team.purse?.remainingAmount || 5000000;
-
-      if (remainingAmount - amount < minRequiredReserve) {
-        return {
-          success: false,
-          error: `Purse Reserve Violation: ${team.name} must reserve ₹${minRequiredReserve.toLocaleString()} for minimum squad spots`,
-          state,
-        };
-      }
-
-      // Authoritative timer extension: Reset timer to NOW + extensionSeconds (default 10s)
-      const extensionSeconds = state.rules.bidExtensionSeconds || 10;
-      const newExpiryTime = Date.now() + extensionSeconds * 1000;
-      const newExpiryIso = new Date(newExpiryTime).toISOString();
-
-      const newBid: Bid = {
-        id: `bid-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        auctionId: state.session.id,
-        playerId: state.session.currentPlayerId || "",
-        teamId: team.id,
-        teamName: team.name,
-        teamShortCode: team.shortCode,
-        teamLogoUrl: team.logoUrl,
-        amount,
-        bidType: state.session.bidCount === 0 ? "BASE" : "STANDARD",
-        placedAt: nowIso,
-      };
-
-      state.session = {
-        ...state.session,
-        status: "IN_PROGRESS",
-        currentHighestBid: amount,
-        currentLeadingTeamId: team.id,
-        currentLeadingTeam: team,
-        timerSeconds: extensionSeconds,
-        timerExpiresAt: newExpiryIso,
-        lastBidAt: nowIso,
-        bidCount: state.session.bidCount + 1,
-        recentBids: [newBid, ...state.session.recentBids],
-      };
-
+    await saveLeagueConfigToSheets(updatedLeague, config.rules);
+    const freshState = await getAuthoritativeLeagueState(leagueId);
+    if (freshState) {
       broadcastEvent({
-        type: "BID_PLACED",
+        type: "LEAGUE_UPDATED",
         leagueId,
         timestamp: nowIso,
-        session: state.session,
-        teams: state.teams,
-        lastAction: {
-          type: "PLACE_BID",
-          teamName: team.name,
-          amount,
-          message: `Bid of ₹${amount.toLocaleString()} registered by ${team.name}`,
-        },
+        session: freshState.session,
+        league: freshState.league,
       });
-
-      return {
-        success: true,
-        message: `Bid ₹${amount.toLocaleString()} registered for ${team.name}`,
-        state,
-      };
+      return { success: true, message: "League configuration updated", state: freshState };
     }
+  }
 
-    case "SELECT_LOT": {
-      const { playerId } = payload;
-      let targetPlayer: Player | undefined;
+  // Handle UPDATE_RULES directly
+  if (type === "UPDATE_RULES" && payload.rules) {
+    const config = await getLeagueConfigFromSheets(leagueId);
+    const updatedRules: AuctionRules = {
+      ...config.rules,
+      ...payload.rules,
+      seasonId: leagueId,
+    };
 
-      if (playerId) {
-        targetPlayer = state.players.find((p) => p.id === playerId);
-      } else {
-        // Find next AVAILABLE player
-        targetPlayer = state.players.find((p) => p.status === "AVAILABLE") || state.players[0];
-      }
-
-      if (!targetPlayer) {
-        return { success: false, error: "No players available to spotlight", state };
-      }
-
-      const initialDuration = state.rules.initialTimerSeconds || 45;
-      const expiryIso = new Date(Date.now() + initialDuration * 1000).toISOString();
-      const basePrice = targetPlayer.basePriceOverride || targetPlayer.basePrice || 25000;
-
-      // Mark player as ON_AUCTION
-      state.players = state.players.map((p) =>
-        p.id === targetPlayer!.id
-          ? { ...p, status: "ON_AUCTION" }
-          : p.status === "ON_AUCTION"
-          ? { ...p, status: "AVAILABLE" }
-          : p
-      );
-
-      state.session = {
-        ...state.session,
-        status: "IN_PROGRESS",
-        currentPlayerId: targetPlayer.id,
-        currentPlayer: { ...targetPlayer, status: "ON_AUCTION" },
-        currentHighestBid: 0,
-        currentLeadingTeamId: null,
-        currentLeadingTeam: null,
-        timerSeconds: initialDuration,
-        timerExpiresAt: expiryIso,
-        lastBidAt: undefined,
-        bidCount: 0,
-        recentBids: [],
-      };
-
+    await saveLeagueConfigToSheets(config.league, updatedRules);
+    const freshState = await getAuthoritativeLeagueState(leagueId);
+    if (freshState) {
       broadcastEvent({
-        type: "LOT_CHANGED",
+        type: "RULES_UPDATED",
         leagueId,
         timestamp: nowIso,
-        session: state.session,
-        players: state.players,
-        lastAction: {
-          type: "SELECT_LOT",
-          playerName: targetPlayer.fullName,
-          amount: basePrice,
-          message: `Now on Auction: ${targetPlayer.fullName} (Base: ₹${basePrice.toLocaleString()})`,
-        },
+        session: freshState.session,
+        rules: freshState.rules,
       });
-
-      return {
-        success: true,
-        message: `Spotlighted ${targetPlayer.fullName}`,
-        state,
-      };
+      return { success: true, message: "Auction rules updated", state: freshState };
     }
+  }
 
-    case "HAMMER_SOLD": {
-      if (state.session.bidCount === 0 || !state.session.currentLeadingTeam || !state.session.currentPlayer) {
-        return { success: false, error: "Cannot hammer lot: No valid bids received", state };
-      }
+  // Handle UPDATE_TEAMS directly
+  if (type === "UPDATE_TEAMS" && payload.teams) {
+    await saveTeamsToSheets(leagueId, payload.teams);
+    const freshState = await getAuthoritativeLeagueState(leagueId);
+    if (freshState) {
+      broadcastEvent({
+        type: "TEAMS_UPDATED",
+        leagueId,
+        timestamp: nowIso,
+        session: freshState.session,
+        teams: freshState.teams,
+      });
+      return { success: true, message: "Teams updated", state: freshState };
+    }
+  }
 
-      const soldPlayer = state.session.currentPlayer;
-      const winner = state.session.currentLeadingTeam;
-      const finalPrice = state.session.currentHighestBid;
-      const soldPlayerId = soldPlayer.id;
+  // Handle UPDATE_PLAYERS directly
+  if (type === "UPDATE_PLAYERS" && payload.players) {
+    await savePlayersToSheets(leagueId, payload.players);
+    const freshState = await getAuthoritativeLeagueState(leagueId);
+    if (freshState) {
+      broadcastEvent({
+        type: "PLAYERS_UPDATED",
+        leagueId,
+        timestamp: nowIso,
+        session: freshState.session,
+        players: freshState.players,
+      });
+      return { success: true, message: "Players updated", state: freshState };
+    }
+  }
 
-      // 1. Update player status
-      state.players = state.players.map((p) =>
-        p.id === soldPlayerId
-          ? { ...p, status: "SOLD", soldToTeamId: winner.id, soldPrice: finalPrice }
-          : p
-      );
+  // Execute bidding and lifecycle actions inside serialized transaction
+  const txResult = await executeSerializedAuctionAction(leagueId, async (ctx) => {
+    const { state, teams, players, rules, recentBids } = ctx;
 
-      // 2. Deduct purse from winning team and increment squad
-      state.teams = state.teams.map((t) => {
-        if (t.id === winner.id) {
-          const spent = (t.purse?.spentAmount || 0) + finalPrice;
-          const totalBudget = t.purse?.totalBudget || 5000000;
+    switch (type) {
+      case "PLACE_BID": {
+        const { teamId, amount } = payload;
+        if (!teamId || typeof amount !== "number" || amount <= 0) {
+          return { success: false, error: "Invalid team or bid amount" };
+        }
+
+        if (state.status === "PAUSED") {
+          return { success: false, error: "Auction is paused. Resume before accepting bids." };
+        }
+
+        const team = teams.find((t) => t.id === teamId);
+        if (!team) {
+          return { success: false, error: "Franchise not found" };
+        }
+
+        const currentHighest = state.currentHighestBid || 0;
+        if (amount <= currentHighest && state.bidCount > 0) {
           return {
-            ...t,
-            squadCount: (t.squadCount || 0) + 1,
-            purse: {
-              ...t.purse,
-              spentAmount: spent,
-              remainingAmount: totalBudget - spent,
-            },
+            success: false,
+            error: `Bid of ₹${amount.toLocaleString()} must strictly exceed current highest bid of ₹${currentHighest.toLocaleString()}`,
           };
         }
-        return t;
-      });
 
-      // Update current leading team reference in state
-      const updatedWinner = state.teams.find((t) => t.id === winner.id) || winner;
+        // Validate squad reserve rules
+        const currentSquad = team.squadCount || 0;
+        const minPlayers = team.purse?.minPlayers || 15;
+        const minRequiredReserve = Math.max(0, minPlayers - currentSquad - 1) * 25000;
+        const remainingAmount = team.purse?.remainingAmount || 5000000;
 
-      state.session = {
-        ...state.session,
-        status: "IDLE",
-        currentLeadingTeam: updatedWinner,
-        currentPlayer: {
-          ...soldPlayer,
-          status: "SOLD",
-          soldToTeamId: winner.id,
-          soldPrice: finalPrice,
-        },
-      };
+        if (remainingAmount - amount < minRequiredReserve) {
+          return {
+            success: false,
+            error: `Purse Reserve Violation: ${team.name} must retain ₹${minRequiredReserve.toLocaleString()} for minimum squad spots`,
+          };
+        }
 
-      broadcastEvent({
-        type: "LOT_SOLD",
-        leagueId,
-        timestamp: nowIso,
-        session: state.session,
-        teams: state.teams,
-        players: state.players,
-        lastAction: {
-          type: "HAMMER_SOLD",
-          teamName: winner.name,
-          playerName: soldPlayer.fullName,
-          amount: finalPrice,
-          message: `SOLD! ${soldPlayer.fullName} hammered to ${winner.name} for ₹${finalPrice.toLocaleString()}`,
-        },
-      });
+        // Authoritative timer extension (+10s or configured extension)
+        const extensionSeconds = rules.bidExtensionSeconds || 10;
+        const newExpiryTime = Date.now() + extensionSeconds * 1000;
+        const newExpiryIso = new Date(newExpiryTime).toISOString();
 
-      return {
-        success: true,
-        message: `SOLD: ${soldPlayer.fullName} to ${winner.name} for ₹${finalPrice.toLocaleString()}`,
-        state,
-      };
-    }
+        const newBid: Bid = {
+          id: `bid-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          auctionId: state.id,
+          playerId: state.currentPlayerId || "",
+          teamId: team.id,
+          teamName: team.name,
+          teamShortCode: team.shortCode,
+          teamLogoUrl: team.logoUrl,
+          amount,
+          bidType: state.bidCount === 0 ? "BASE" : "STANDARD",
+          placedAt: nowIso,
+        };
 
-    case "HAMMER_UNSOLD": {
-      if (!state.session.currentPlayer) {
-        return { success: false, error: "No player currently on auction", state };
+        const newState: AuctionStateRow = {
+          ...state,
+          status: "IN_PROGRESS",
+          currentHighestBid: amount,
+          currentLeadingTeamId: team.id,
+          timerSeconds: extensionSeconds,
+          timerExpiresAt: newExpiryIso,
+          bidCount: (state.bidCount || 0) + 1,
+        };
+
+        const auditEntry: AuditLogEntry = {
+          id: `audit-${Date.now()}`,
+          seasonId: leagueId,
+          actionType: "BID_PLACED",
+          actor: "AUCTIONEER",
+          detailsJson: JSON.stringify({ team: team.name, amount, player: state.currentPlayerId }),
+          timestamp: nowIso,
+        };
+
+        return {
+          success: true,
+          message: `Bid ₹${amount.toLocaleString()} registered by ${team.name}`,
+          newState,
+          newBid,
+          auditEntry,
+        };
       }
 
-      const unsoldPlayer = state.session.currentPlayer;
+      case "SELECT_LOT": {
+        const { playerId } = payload;
+        let targetPlayer: Player | undefined;
 
-      state.players = state.players.map((p) =>
-        p.id === unsoldPlayer.id ? { ...p, status: "UNSOLD" } : p
-      );
+        if (playerId) {
+          targetPlayer = players.find((p) => p.id === playerId);
+        } else {
+          targetPlayer = players.find((p) => p.status === "AVAILABLE") || players[0];
+        }
 
-      state.session = {
-        ...state.session,
-        status: "IDLE",
-        currentHighestBid: 0,
-        currentLeadingTeamId: null,
-        currentLeadingTeam: null,
-        currentPlayer: {
-          ...unsoldPlayer,
-          status: "UNSOLD",
-        },
-      };
+        if (!targetPlayer) {
+          return { success: false, error: "No players available to spotlight" };
+        }
 
-      broadcastEvent({
-        type: "LOT_UNSOLD",
-        leagueId,
-        timestamp: nowIso,
-        session: state.session,
-        players: state.players,
-        lastAction: {
-          type: "HAMMER_UNSOLD",
-          playerName: unsoldPlayer.fullName,
-          message: `${unsoldPlayer.fullName} marked UNSOLD. Requeued for accelerated round.`,
-        },
-      });
+        const initialDuration = rules.initialTimerSeconds || 45;
+        const expiryIso = new Date(Date.now() + initialDuration * 1000).toISOString();
+        const basePrice = targetPlayer.basePriceOverride || targetPlayer.basePrice || 25000;
 
-      return {
-        success: true,
-        message: `${unsoldPlayer.fullName} marked UNSOLD`,
-        state,
-      };
-    }
-
-    case "PAUSE_RESUME": {
-      if (state.session.status === "PAUSED") {
-        // Resuming
-        const restoredSeconds = state.pausedRemainingSeconds || 15;
-        const newExpiry = new Date(Date.now() + restoredSeconds * 1000).toISOString();
-
-        state.session = {
-          ...state.session,
-          status: "IN_PROGRESS",
-          timerSeconds: restoredSeconds,
-          timerExpiresAt: newExpiry,
-        };
-        state.pausedRemainingSeconds = undefined;
-
-        broadcastEvent({
-          type: "RESUMED",
-          leagueId,
-          timestamp: nowIso,
-          session: state.session,
-          lastAction: {
-            type: "PAUSE_RESUME",
-            message: `Auction clock resumed with ${restoredSeconds}s remaining`,
-          },
-        });
-
-        return { success: true, message: "Auction resumed", state };
-      } else {
-        // Pausing
-        const remaining = Math.max(
-          1,
-          state.session.timerExpiresAt
-            ? Math.ceil((new Date(state.session.timerExpiresAt).getTime() - Date.now()) / 1000)
-            : state.session.timerSeconds
+        const updatedPlayers = players.map((p) =>
+          p.id === targetPlayer!.id
+            ? { ...p, status: "ON_AUCTION" as const }
+            : p.status === "ON_AUCTION"
+            ? { ...p, status: "AVAILABLE" as const }
+            : p
         );
 
-        state.pausedRemainingSeconds = remaining;
-        state.session = {
-          ...state.session,
-          status: "PAUSED",
-          timerSeconds: remaining,
+        const newState: AuctionStateRow = {
+          ...state,
+          currentPlayerId: targetPlayer.id,
+          currentHighestBid: 0,
+          currentLeadingTeamId: null,
+          timerSeconds: initialDuration,
+          timerExpiresAt: expiryIso,
+          status: "IN_PROGRESS",
+          bidCount: 0,
         };
 
-        broadcastEvent({
-          type: "PAUSED",
-          leagueId,
+        const auditEntry: AuditLogEntry = {
+          id: `audit-${Date.now()}`,
+          seasonId: leagueId,
+          actionType: "LOT_SELECTED",
+          actor: "AUCTIONEER",
+          detailsJson: JSON.stringify({ player: targetPlayer.fullName, basePrice }),
           timestamp: nowIso,
-          session: state.session,
-          lastAction: {
-            type: "PAUSE_RESUME",
-            message: `Auction paused by administrator (${remaining}s held)`,
-          },
+        };
+
+        return {
+          success: true,
+          message: `Spotlighted ${targetPlayer.fullName} (Base: ₹${basePrice.toLocaleString()})`,
+          newState,
+          updatedPlayers,
+          auditEntry,
+        };
+      }
+
+      case "HAMMER_SOLD": {
+        if (!state.currentPlayerId) {
+          return { success: false, error: "No player currently on auction" };
+        }
+
+        if (!state.currentLeadingTeamId || state.currentHighestBid <= 0) {
+          return { success: false, error: "Cannot sell lot without any valid bids" };
+        }
+
+        const soldPlayer = players.find((p) => p.id === state.currentPlayerId);
+        const buyerTeam = teams.find((t) => t.id === state.currentLeadingTeamId);
+
+        if (!soldPlayer || !buyerTeam) {
+          return { success: false, error: "Player or winning franchise not found" };
+        }
+
+        const finalPrice = state.currentHighestBid;
+
+        // Deduct purse and increment squad count
+        const updatedTeams = teams.map((t) => {
+          if (t.id === buyerTeam.id) {
+            const currentSpent = t.purse?.spentAmount || 0;
+            const newSpent = currentSpent + finalPrice;
+            const newRemaining = (t.purse?.totalBudget || 5000000) - newSpent;
+            const newSquadCount = (t.squadCount || 0) + 1;
+            const minPlayers = t.purse?.minPlayers || 15;
+            const reserved = Math.max(0, minPlayers - newSquadCount) * 25000;
+
+            return {
+              ...t,
+              squadCount: newSquadCount,
+              purse: {
+                ...t.purse,
+                spentAmount: newSpent,
+                remainingAmount: newRemaining,
+                reservedForSquad: reserved,
+              },
+            };
+          }
+          return t;
         });
 
-        return { success: true, message: "Auction paused", state };
-      }
-    }
+        const updatedPlayers = players.map((p) =>
+          p.id === soldPlayer.id
+            ? { ...p, status: "SOLD" as const, soldToTeamId: buyerTeam.id, soldPrice: finalPrice }
+            : p
+        );
 
-    case "UNDO": {
-      if (state.session.recentBids.length === 0) {
-        return { success: false, error: "No actions available to undo", state };
-      }
+        // Find next AVAILABLE player
+        const nextPlayer = updatedPlayers.find((p) => p.status === "AVAILABLE");
+        const initialDuration = rules.initialTimerSeconds || 45;
 
-      // Revert last bid
-      const undoneBid = state.session.recentBids[0];
-      const remainingBids = state.session.recentBids.slice(1);
-      const prevBid = remainingBids[0];
+        const newState: AuctionStateRow = {
+          ...state,
+          currentPlayerId: nextPlayer ? nextPlayer.id : null,
+          currentHighestBid: 0,
+          currentLeadingTeamId: null,
+          timerSeconds: initialDuration,
+          timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
+          status: nextPlayer ? "IN_PROGRESS" : "FINISHED",
+          bidCount: 0,
+          round: state.round || 1,
+        };
 
-      const extensionSeconds = state.rules.bidExtensionSeconds || 15;
-      const restoredExpiry = new Date(Date.now() + extensionSeconds * 1000).toISOString();
+        const newPurchase: PurchaseRecord = {
+          id: `purchase-${soldPlayer.id}`,
+          seasonId: leagueId,
+          playerId: soldPlayer.id,
+          playerName: soldPlayer.fullName,
+          playerCategory: soldPlayer.category,
+          playerRole: soldPlayer.primaryRole,
+          teamId: buyerTeam.id,
+          teamName: buyerTeam.name,
+          soldPrice: finalPrice,
+          round: state.round || 1,
+          soldAt: nowIso,
+        };
 
-      let restoredLeadingTeam: Team | null = null;
-      if (prevBid) {
-        restoredLeadingTeam = state.teams.find((t) => t.id === prevBid.teamId) || null;
-      }
-
-      const restoredAmount = prevBid ? prevBid.amount : 0;
-
-      state.session = {
-        ...state.session,
-        currentHighestBid: restoredAmount,
-        currentLeadingTeamId: prevBid ? prevBid.teamId : null,
-        currentLeadingTeam: restoredLeadingTeam,
-        bidCount: Math.max(0, state.session.bidCount - 1),
-        recentBids: remainingBids,
-        timerSeconds: extensionSeconds,
-        timerExpiresAt: restoredExpiry,
-      };
-
-      broadcastEvent({
-        type: "BID_UNDONE",
-        leagueId,
-        timestamp: nowIso,
-        session: state.session,
-        lastAction: {
-          type: "UNDO",
-          message: `Undid bid of ₹${undoneBid.amount.toLocaleString()}. Restored to ${restoredAmount > 0 ? `₹${restoredAmount.toLocaleString()}` : "Base"}`,
-        },
-      });
-
-      return {
-        success: true,
-        message: `Undid last bid of ₹${undoneBid.amount.toLocaleString()}`,
-        state,
-      };
-    }
-
-    case "RESET_LOT": {
-      const initialDuration = state.rules.initialTimerSeconds || 45;
-      state.session = {
-        ...state.session,
-        currentHighestBid: 0,
-        currentLeadingTeamId: null,
-        currentLeadingTeam: null,
-        bidCount: 0,
-        recentBids: [],
-        timerSeconds: initialDuration,
-        timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
-        status: "IN_PROGRESS",
-      };
-
-      broadcastEvent({
-        type: "LOT_RESET",
-        leagueId,
-        timestamp: nowIso,
-        session: state.session,
-        lastAction: {
-          type: "RESET_LOT",
-          message: "Current lot bidding ladder reset",
-        },
-      });
-
-      return { success: true, message: "Lot reset", state };
-    }
-
-    case "UPDATE_TEAMS": {
-      if (payload.teams) {
-        state.teams = payload.teams;
-        broadcastEvent({
-          type: "TEAMS_UPDATED",
-          leagueId,
+        const auditEntry: AuditLogEntry = {
+          id: `audit-${Date.now()}`,
+          seasonId: leagueId,
+          actionType: "LOT_SOLD",
+          actor: "AUCTIONEER",
+          detailsJson: JSON.stringify({ player: soldPlayer.fullName, buyer: buyerTeam.name, price: finalPrice }),
           timestamp: nowIso,
-          session: state.session,
-          teams: state.teams,
-        });
-      }
-      return { success: true, message: "Teams updated", state };
-    }
+        };
 
-    case "UPDATE_PLAYERS": {
-      if (payload.players) {
-        state.players = payload.players;
-        broadcastEvent({
-          type: "PLAYERS_UPDATED",
-          leagueId,
+        return {
+          success: true,
+          message: `SOLD! ${soldPlayer.fullName} acquired by ${buyerTeam.name} for ₹${finalPrice.toLocaleString()}`,
+          newState,
+          updatedTeams,
+          updatedPlayers,
+          newPurchase,
+          auditEntry,
+        };
+      }
+
+      case "HAMMER_UNSOLD": {
+        if (!state.currentPlayerId) {
+          return { success: false, error: "No player currently on auction" };
+        }
+
+        const unsoldPlayer = players.find((p) => p.id === state.currentPlayerId);
+        if (!unsoldPlayer) {
+          return { success: false, error: "Target lot player not found" };
+        }
+
+        const updatedPlayers = players.map((p) =>
+          p.id === unsoldPlayer.id ? { ...p, status: "UNSOLD" as const } : p
+        );
+
+        const nextPlayer = updatedPlayers.find((p) => p.status === "AVAILABLE");
+        const initialDuration = rules.initialTimerSeconds || 45;
+
+        const newState: AuctionStateRow = {
+          ...state,
+          currentPlayerId: nextPlayer ? nextPlayer.id : null,
+          currentHighestBid: 0,
+          currentLeadingTeamId: null,
+          timerSeconds: initialDuration,
+          timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
+          status: nextPlayer ? "IN_PROGRESS" : "FINISHED",
+          bidCount: 0,
+        };
+
+        const auditEntry: AuditLogEntry = {
+          id: `audit-${Date.now()}`,
+          seasonId: leagueId,
+          actionType: "LOT_UNSOLD",
+          actor: "AUCTIONEER",
+          detailsJson: JSON.stringify({ player: unsoldPlayer.fullName, reason: payload.reason || "Passed" }),
           timestamp: nowIso,
-          session: state.session,
-          players: state.players,
-        });
-      }
-      return { success: true, message: "Players updated", state };
-    }
+        };
 
-    case "UPDATE_RULES": {
-      if (payload.rules) {
-        state.rules = { ...state.rules, ...payload.rules };
-        broadcastEvent({
-          type: "RULES_UPDATED",
-          leagueId,
+        return {
+          success: true,
+          message: `${unsoldPlayer.fullName} marked UNSOLD`,
+          newState,
+          updatedPlayers,
+          auditEntry,
+        };
+      }
+
+      case "PAUSE_RESUME": {
+        if (state.status === "PAUSED") {
+          // Resume countdown
+          const remainingSeconds = state.pausedRemainingSeconds || state.timerSeconds || 15;
+          const newExpiryIso = new Date(Date.now() + remainingSeconds * 1000).toISOString();
+
+          const newState: AuctionStateRow = {
+            ...state,
+            status: "IN_PROGRESS",
+            timerSeconds: remainingSeconds,
+            timerExpiresAt: newExpiryIso,
+            pausedRemainingSeconds: undefined,
+          };
+
+          return { success: true, message: "Auction resumed", newState };
+        } else {
+          // Pause countdown
+          const nowMs = Date.now();
+          const expiryMs = new Date(state.timerExpiresAt).getTime();
+          const remaining = Math.max(1, Math.round((expiryMs - nowMs) / 1000));
+
+          const newState: AuctionStateRow = {
+            ...state,
+            status: "PAUSED",
+            timerSeconds: remaining,
+            pausedRemainingSeconds: remaining,
+          };
+
+          return { success: true, message: `Auction paused (${remaining}s remaining)`, newState };
+        }
+      }
+
+      case "UNDO": {
+        const undoneBid = await markLastBidUndoneInSheets(leagueId);
+        if (!undoneBid) {
+          return { success: false, error: "No active bids available to undo" };
+        }
+
+        const remainingBids = recentBids.filter((b) => b.id !== undoneBid.id);
+        const prevBid = remainingBids[0];
+        const extensionSeconds = rules.bidExtensionSeconds || 15;
+        const restoredExpiry = new Date(Date.now() + extensionSeconds * 1000).toISOString();
+
+        const newState: AuctionStateRow = {
+          ...state,
+          currentHighestBid: prevBid ? prevBid.amount : 0,
+          currentLeadingTeamId: prevBid ? prevBid.teamId : null,
+          bidCount: Math.max(0, (state.bidCount || 1) - 1),
+          timerSeconds: extensionSeconds,
+          timerExpiresAt: restoredExpiry,
+        };
+
+        const auditEntry: AuditLogEntry = {
+          id: `audit-${Date.now()}`,
+          seasonId: leagueId,
+          actionType: "UNDO_BID",
+          actor: "AUCTIONEER",
+          detailsJson: JSON.stringify({ undoneBid: undoneBid.amount, team: undoneBid.teamName }),
           timestamp: nowIso,
-          session: state.session,
-          rules: state.rules,
-        });
-      }
-      return { success: true, message: "Rules updated", state };
-    }
+        };
 
-    case "UPDATE_LEAGUE": {
-      if (payload.league) {
-        state.league = { ...state.league, ...payload.league };
-        broadcastEvent({
-          type: "LEAGUE_UPDATED",
-          leagueId,
-          timestamp: nowIso,
-          session: state.session,
-          league: state.league,
-        });
+        return {
+          success: true,
+          message: `Undid last bid of ₹${undoneBid.amount.toLocaleString()}`,
+          newState,
+          auditEntry,
+        };
       }
-      return { success: true, message: "League updated", state };
-    }
 
-    default:
-      return { success: false, error: `Unknown action type: ${type}`, state };
+      case "RESET_LOT": {
+        const initialDuration = rules.initialTimerSeconds || 45;
+        const newState: AuctionStateRow = {
+          ...state,
+          currentHighestBid: 0,
+          currentLeadingTeamId: null,
+          bidCount: 0,
+          timerSeconds: initialDuration,
+          timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
+          status: "IN_PROGRESS",
+        };
+
+        return { success: true, message: "Current lot bidding ladder reset", newState };
+      }
+
+      default:
+        return { success: false, error: `Unsupported action type: ${type}` };
+    }
+  });
+
+  if (!txResult.success) {
+    return { success: false, error: txResult.error };
   }
+
+  // Load fresh authoritative state and broadcast real-time SSE event
+  const freshState = await getAuthoritativeLeagueState(leagueId);
+  if (freshState) {
+    let eventType = "AUCTION_UPDATED";
+    if (type === "PLACE_BID") eventType = "BID_PLACED";
+    else if (type === "HAMMER_SOLD") eventType = "LOT_SOLD";
+    else if (type === "HAMMER_UNSOLD") eventType = "LOT_UNSOLD";
+    else if (type === "SELECT_LOT") eventType = "LOT_CHANGED";
+    else if (type === "PAUSE_RESUME") eventType = freshState.session.status === "PAUSED" ? "PAUSED" : "RESUMED";
+    else if (type === "UNDO") eventType = "BID_UNDONE";
+    else if (type === "RESET_LOT") eventType = "LOT_RESET";
+
+    broadcastEvent({
+      type: eventType,
+      leagueId,
+      timestamp: nowIso,
+      session: freshState.session,
+      teams: freshState.teams,
+      players: freshState.players,
+      rules: freshState.rules,
+      league: freshState.league,
+      lastAction: {
+        type,
+        message: txResult.message,
+      },
+    });
+
+    return {
+      success: true,
+      message: txResult.message,
+      state: freshState,
+    };
+  }
+
+  return { success: true, message: txResult.message };
 }

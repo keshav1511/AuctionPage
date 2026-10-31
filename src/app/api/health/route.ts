@@ -7,8 +7,9 @@ export async function GET() {
     edition: "Season 1",
     timestamp: new Date().toISOString(),
     services: {
-      supabase: process.env.NEXT_PUBLIC_SUPABASE_URL ? "configured" : "unconfigured_mock_fallback",
+      dataStorage: "google_sheets_v4",
       googleSheets: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ? "configured" : "unconfigured_mock_fallback",
+      googleDrive: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ? "configured" : "unconfigured_mock_fallback",
     },
   });
 }

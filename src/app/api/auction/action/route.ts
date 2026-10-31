@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = processAuctionAction(payload);
+    const result = await processAuctionAction(payload);
 
     if (!result.success) {
       const isNotFound = Boolean(result.error && result.error.includes("not found"));
