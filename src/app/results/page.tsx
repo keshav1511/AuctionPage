@@ -7,10 +7,15 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { formatCurrency, formatRole, getCategoryBadgeColor } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
+import { useRealtimeAuction } from "@/lib/hooks/use-realtime-auction";
 import { Search, CheckCircle2, XCircle, Clock } from "lucide-react";
 
 export default function ResultsPage() {
-  const { activeLeague, players, teams } = useLeague();
+  const { activeLeague } = useLeague();
+  const { players: livePlayers, teams: liveTeams } = useRealtimeAuction(activeLeague.id);
+  const players = livePlayers;
+  const teams = liveTeams;
+
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [categoryFilter, setCategoryFilter] = useState<string>("ALL");

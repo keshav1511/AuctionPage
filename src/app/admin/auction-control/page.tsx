@@ -9,9 +9,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatRole, getCategoryBadgeColor } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
-import { MOCK_AUCTION_SESSION } from "@/lib/mock-data/auction";
+import { useRealtimeAuction } from "@/lib/hooks/use-realtime-auction";
 import { calculateNextBid } from "@/lib/auction/slab-calculator";
-import { Team, Player, Bid } from "@/types";
+import { Team, Player } from "@/types";
 import {
   Gavel,
   RotateCcw,
@@ -21,23 +21,36 @@ import {
   Clock,
   ChevronRight,
   User,
+  Radio,
 } from "lucide-react";
 
 export default function AuctionControlDesk() {
-  const { activeLeague, teams, updateTeam, players, updatePlayer } = useLeague();
+  const { activeLeague } = useLeague();
+  const {
+    session,
+    teams: liveTeams,
+    players: livePlayers,
+    isConnected,
+    remainingSeconds,
+    lastActionMessage,
+    placeBid,
+    selectLot,
+    hammerSold,
+    markUnsold,
+    togglePause,
+    undo,
+  } = useRealtimeAuction(activeLeague.id);
 
-  const [session, setSession] = useState(MOCK_AUCTION_SESSION);
   const [activePlayerIndex, setActivePlayerIndex] = useState(0);
-  const [isPaused, setIsPaused] = useState(false);
-  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [localNotice, setLocalNotice] = useState<string | null>(null);
 
-  // Authoritative server timestamp representation
-  const [timerExpiresAt, setTimerExpiresAt] = useState<number>(Date.now() + 45000);
-  const [remainingSeconds, setRemainingSeconds] = useState<number>(45);
+  const actionNotice = lastActionMessage || localNotice;
+  const isPaused = session.status === "PAUSED";
 
   const currentPlayer: Player = useMemo(
     () =>
-      players[activePlayerIndex] || {
+      session.currentPlayer ||
+      livePlayers[activePlayerIndex] || {
         id: "fallback-p1",
         seasonId: activeLeague.id,
         registrationNo: "NTL-001",
@@ -51,7 +64,7 @@ export default function AuctionControlDesk() {
         status: "ON_AUCTION",
         sortOrder: 1,
       },
-    [players, activePlayerIndex, activeLeague.id]
+    [session.currentPlayer, livePlayers, activePlayerIndex, activeLeague.id]
   );
 
   const { nextBid, step: currentStep } = calculateNextBid(
@@ -60,198 +73,84 @@ export default function AuctionControlDesk() {
   );
 
   /**
-   * Marks player UNSOLD and resets
+   * Marks player UNSOLD and broadcasts
    */
   const handleMarkUnsold = useCallback(
-    (reason: string = "Passed by Auctioneer") => {
-      updatePlayer(currentPlayer.id, { status: "UNSOLD" });
-      setActionNotice(`${currentPlayer.fullName} marked UNSOLD (${reason}). Requeued for accelerated round.`);
-      setTimeout(() => setActionNotice(null), 3500);
+    async (reason: string = "Passed by Auctioneer") => {
+      await markUnsold(reason);
     },
-    [currentPlayer.id, currentPlayer.fullName, updatePlayer]
+    [markUnsold]
   );
 
-  // Authoritative countdown tick derived from (timerExpiresAt - Date.now())
+  // Auto-unsold trigger when countdown reaches zero with 0 bids
   useEffect(() => {
-    if (isPaused || session.status === "FINISHED") return;
-
-    const interval = setInterval(() => {
-      const diff = Math.max(0, Math.ceil((timerExpiresAt - Date.now()) / 1000));
-      setRemainingSeconds(diff);
-
-      // Auto-unsold trigger when timer reaches zero without bid
-      if (diff === 0 && session.bidCount === 0 && currentPlayer.status === "AVAILABLE") {
-        handleMarkUnsold("No bids received within countdown window");
-      }
-    }, 200);
-
-    return () => clearInterval(interval);
-  }, [timerExpiresAt, isPaused, session.status, session.bidCount, currentPlayer.status, handleMarkUnsold]);
+    if (isPaused || session.status === "FINISHED" || session.status === "IDLE") return;
+    if (remainingSeconds === 0 && session.bidCount === 0 && currentPlayer.status === "ON_AUCTION") {
+      handleMarkUnsold("No bids received within countdown window");
+    }
+  }, [remainingSeconds, isPaused, session.status, session.bidCount, currentPlayer.status, handleMarkUnsold]);
 
   /**
    * Submits a bid for a specific franchise (1-Click Team Logo Bidding)
    */
   const handleTeamBid = useCallback(
-    (targetTeam: Team, customAmount?: number) => {
+    async (targetTeam: Team, customAmount?: number) => {
       const bidAmount = customAmount || nextBid;
-
-      // Squad & purse reserve validation
-      const currentSquad = targetTeam.squadCount || 0;
-      const minPlayers = targetTeam.purse?.minPlayers || 15;
-      const minRequiredReserve = Math.max(0, minPlayers - currentSquad - 1) * 25000;
-      const remainingAmount = targetTeam.purse?.remainingAmount || 5000000;
-
-      if (remainingAmount - bidAmount < minRequiredReserve) {
-        setActionNotice(
-          `Purse Reserve Violation: ${targetTeam.name} must reserve ₹${minRequiredReserve.toLocaleString()} for minimum squad spots!`
-        );
-        setTimeout(() => setActionNotice(null), 3500);
-        return;
+      const res = await placeBid(targetTeam.id, bidAmount);
+      if (!res.success) {
+        setLocalNotice(res.error || "Bid could not be registered");
+        setTimeout(() => setLocalNotice(null), 3500);
       }
-
-      // Authoritative timer extension: Reset timer to NOW + 10s
-      const extensionMs = 10000;
-      const newExpiry = Date.now() + extensionMs;
-
-      const newBid: Bid = {
-        id: `bid-${Date.now()}`,
-        auctionId: session.id,
-        playerId: currentPlayer.id,
-        teamId: targetTeam.id,
-        teamName: targetTeam.name,
-        teamShortCode: targetTeam.shortCode,
-        teamLogoUrl: targetTeam.logoUrl,
-        amount: bidAmount,
-        bidType: session.bidCount === 0 ? "BASE" : "STANDARD",
-        placedAt: new Date().toISOString(),
-      };
-
-      setTimerExpiresAt(newExpiry);
-      setRemainingSeconds(Math.ceil(extensionMs / 1000));
-
-      setSession((prev) => ({
-        ...prev,
-        currentHighestBid: bidAmount,
-        currentLeadingTeamId: targetTeam.id,
-        currentLeadingTeam: targetTeam,
-        timerSeconds: 10,
-        timerExpiresAt: new Date(newExpiry).toISOString(),
-        lastBidAt: new Date().toISOString(),
-        bidCount: prev.bidCount + 1,
-        recentBids: [newBid, ...prev.recentBids],
-      }));
-
-      setActionNotice(`BID REGISTERED: ${formatCurrency(bidAmount)} for ${targetTeam.name}! (+10s added)`);
-      setTimeout(() => setActionNotice(null), 3000);
     },
-    [nextBid, session.id, session.bidCount, currentPlayer.id]
+    [nextBid, placeBid]
   );
 
   /**
    * Finalizes the current lot (SOLD)
    */
-  const handleHammerDown = useCallback(() => {
+  const handleHammerDown = useCallback(async () => {
     if (session.bidCount === 0 || !session.currentLeadingTeam) {
-      setActionNotice("Cannot hammer lot: No valid bids placed yet!");
-      setTimeout(() => setActionNotice(null), 3000);
+      setLocalNotice("Cannot hammer lot: No valid bids placed yet!");
+      setTimeout(() => setLocalNotice(null), 3000);
       return;
     }
 
     confetti({
-      particleCount: 120,
-      spread: 70,
+      particleCount: 130,
+      spread: 75,
       origin: { y: 0.6 },
     });
 
-    const winningPrice = session.currentHighestBid;
-    const winner = session.currentLeadingTeam;
-
-    // Deduct purse and increment squad count in context
-    const currentSpent = winner.purse?.spentAmount || 0;
-    const totalBudget = winner.purse?.totalBudget || 5000000;
-    const newSpent = currentSpent + winningPrice;
-
-    updateTeam(winner.id, {
-      squadCount: (winner.squadCount || 0) + 1,
-      purse: {
-        ...winner.purse,
-        spentAmount: newSpent,
-        remainingAmount: totalBudget - newSpent,
-      },
-    });
-
-    updatePlayer(currentPlayer.id, {
-      status: "SOLD",
-      soldToTeamId: winner.id,
-      soldPrice: winningPrice,
-    });
-
-    setActionNotice(
-      `HAMMER DOWN: ${currentPlayer.fullName} SOLD to ${winner.name} for ${formatCurrency(winningPrice)}!`
-    );
-  }, [session.bidCount, session.currentLeadingTeam, session.currentHighestBid, currentPlayer, updateTeam, updatePlayer]);
+    const res = await hammerSold();
+    if (!res.success) {
+      setLocalNotice(res.error || "Hammer action failed");
+      setTimeout(() => setLocalNotice(null), 3000);
+    }
+  }, [session.bidCount, session.currentLeadingTeam, hammerSold]);
 
   /**
    * Safe Undo Action
    */
-  const handleUndo = useCallback(() => {
-    if (session.recentBids.length <= 1) {
-      setSession((prev) => ({
-        ...prev,
-        currentHighestBid: currentPlayer.basePriceOverride || currentPlayer.basePrice,
-        currentLeadingTeamId: null,
-        currentLeadingTeam: null,
-        bidCount: 0,
-        recentBids: [],
-      }));
-      setTimerExpiresAt(Date.now() + 45000);
-      setRemainingSeconds(45);
-      setActionNotice("Reverted to base price floor. Bids cleared.");
-      return;
+  const handleUndo = useCallback(async () => {
+    const res = await undo();
+    if (!res.success) {
+      setLocalNotice(res.error || "Nothing to undo");
+      setTimeout(() => setLocalNotice(null), 3000);
     }
-
-    const previousBid = session.recentBids[1];
-    const previousTeam = teams.find((t) => t.id === previousBid.teamId) || null;
-
-    setSession((prev) => ({
-      ...prev,
-      currentHighestBid: previousBid.amount,
-      currentLeadingTeamId: previousBid.teamId,
-      currentLeadingTeam: previousTeam,
-      bidCount: prev.bidCount - 1,
-      recentBids: prev.recentBids.slice(1),
-    }));
-    setTimerExpiresAt(Date.now() + 10000);
-    setRemainingSeconds(10);
-    setActionNotice(`Undone last bid. Standing bid reverted to ${formatCurrency(previousBid.amount)}.`);
-  }, [session.recentBids, currentPlayer, teams]);
+  }, [undo]);
 
   /**
    * Advances to next lot
    */
-  const handleNextPlayer = () => {
-    if (activePlayerIndex < players.length - 1) {
+  const handleNextPlayer = async () => {
+    if (activePlayerIndex < livePlayers.length - 1) {
       const nextIdx = activePlayerIndex + 1;
-      const nextP = players[nextIdx];
+      const nextP = livePlayers[nextIdx];
       setActivePlayerIndex(nextIdx);
-
-      const base = nextP.basePriceOverride || nextP.basePrice;
-      setSession({
-        ...session,
-        currentPlayerId: nextP.id,
-        currentPlayer: nextP,
-        currentHighestBid: base,
-        currentLeadingTeamId: null,
-        currentLeadingTeam: null,
-        bidCount: 0,
-        recentBids: [],
-        status: "IN_PROGRESS",
-      });
-      setTimerExpiresAt(Date.now() + 45000);
-      setRemainingSeconds(45);
-      setActionNotice(`Podium ready: Lot #${nextIdx + 1} - ${nextP.fullName}`);
+      await selectLot(nextP.id);
     } else {
-      setActionNotice("End of player roster reached!");
+      setLocalNotice("End of player roster reached!");
+      setTimeout(() => setLocalNotice(null), 3000);
     }
   };
 
@@ -266,14 +165,14 @@ export default function AuctionControlDesk() {
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         if (session.currentLeadingTeam) {
-          const leader = teams.find((t) => t.id === session.currentLeadingTeam?.id);
+          const leader = liveTeams.find((t) => t.id === session.currentLeadingTeam?.id);
           if (leader) handleTeamBid(leader);
-        } else if (teams.length > 0) {
-          handleTeamBid(teams[0]);
+        } else if (liveTeams.length > 0) {
+          handleTeamBid(liveTeams[0]);
         }
       } else if (e.key === " ") {
         e.preventDefault();
-        setIsPaused((p) => !p);
+        togglePause();
       } else if (e.ctrlKey && e.key.toLowerCase() === "z") {
         e.preventDefault();
         handleUndo();
@@ -282,7 +181,7 @@ export default function AuctionControlDesk() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleHammerDown, handleTeamBid, handleUndo, session.currentLeadingTeam, teams]);
+  }, [handleHammerDown, handleTeamBid, handleUndo, togglePause, session.currentLeadingTeam, liveTeams]);
 
   return (
     <div className="min-h-screen bg-slate-50 flex text-slate-900 font-sans">
@@ -291,9 +190,15 @@ export default function AuctionControlDesk() {
       <div className="flex-1 flex flex-col min-w-0">
         <AdminHeader
           title="Live Auction Control Desk"
-          subtitle={`${activeLeague.name} • Lot ${activePlayerIndex + 1} of ${players.length}`}
+          subtitle={`${activeLeague.name} • Lot ${activePlayerIndex + 1} of ${livePlayers.length}`}
           action={
             <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold bg-white border-slate-200">
+                <Radio className={`w-3 h-3 ${isConnected ? "text-emerald-500 animate-pulse" : "text-amber-500"}`} />
+                <span className={isConnected ? "text-emerald-700" : "text-amber-700"}>
+                  {isConnected ? "Live Synchronized" : "Connecting..."}
+                </span>
+              </div>
               <Button
                 variant="outline"
                 size="sm"
@@ -319,7 +224,7 @@ export default function AuctionControlDesk() {
           {actionNotice && (
             <div className="p-3.5 bg-slate-900 text-white rounded-xl text-xs font-semibold flex items-center justify-between shadow-sm">
               <span>{actionNotice}</span>
-              <button onClick={() => setActionNotice(null)} className="text-slate-400 hover:text-white">✕</button>
+              <button onClick={() => setLocalNotice(null)} className="text-slate-400 hover:text-white">✕</button>
             </div>
           )}
 
@@ -389,7 +294,7 @@ export default function AuctionControlDesk() {
                   {/* Countdown Timer with Pause/Resume */}
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => setIsPaused(!isPaused)}
+                      onClick={togglePause}
                       className="p-1 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600"
                       title={isPaused ? "Resume Countdown" : "Pause Countdown"}
                     >
@@ -454,7 +359,7 @@ export default function AuctionControlDesk() {
 
               {/* Franchise Cards Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                {teams.map((t) => {
+                {liveTeams.map((t) => {
                   const isLeader = session.currentLeadingTeamId === t.id;
                   const remainingPurse = t.purse?.remainingAmount || 5000000;
 

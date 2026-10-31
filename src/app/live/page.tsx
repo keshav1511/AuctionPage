@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect } from "react";
 import Image from "next/image";
 import confetti from "canvas-confetti";
 import { BroadcastHeader } from "@/components/public/broadcast-header";
@@ -12,44 +12,42 @@ import {
   getCategoryBadgeColor,
   getRoleBadgeColor,
 } from "@/lib/utils";
-import { MOCK_AUCTION_SESSION } from "@/lib/mock-data/auction";
 import { MOCK_PLAYERS } from "@/lib/mock-data/players";
 import { useLeague } from "@/lib/context/league-context";
+import { useRealtimeAuction } from "@/lib/hooks/use-realtime-auction";
 import {
   TrendingUp,
   Award,
   Sparkles,
   Zap,
+  Radio,
 } from "lucide-react";
 
 export default function LiveAuctionStage() {
-  const { activeLeague, teams, players } = useLeague();
-  const [session] = useState(MOCK_AUCTION_SESSION);
-  const [timer, setTimer] = useState(session.timerSeconds);
-  const [isHammered, setIsHammered] = useState(false);
-
-  // Countdown timer simulation
-  useEffect(() => {
-    if (timer <= 0 || isHammered) return;
-    const interval = setInterval(() => {
-      setTimer((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [timer, isHammered]);
-
-  const player = session.currentPlayer || players[0] || MOCK_PLAYERS[0];
-  const leadingTeam = session.currentLeadingTeam || teams[0];
+  const { activeLeague } = useLeague();
+  const {
+    session,
+    teams: liveTeams,
+    players: livePlayers,
+    isConnected,
+    remainingSeconds,
+    isHammered,
+  } = useRealtimeAuction(activeLeague.id);
 
   // Trigger celebratory confetti when sold
-  const triggerSoldCelebration = () => {
-    setIsHammered(true);
-    confetti({
-      particleCount: 150,
-      spread: 90,
-      origin: { y: 0.6 },
-      colors: ["#F59E0B", "#10B981", "#FFFFFF", "#FBBF24"],
-    });
-  };
+  useEffect(() => {
+    if (isHammered) {
+      confetti({
+        particleCount: 160,
+        spread: 90,
+        origin: { y: 0.6 },
+        colors: ["#F59E0B", "#10B981", "#FFFFFF", "#FBBF24"],
+      });
+    }
+  }, [isHammered]);
+
+  const player = session.currentPlayer || livePlayers[0] || MOCK_PLAYERS[0];
+  const leadingTeam = session.currentLeadingTeam || liveTeams[0];
 
   return (
     <div className="min-h-screen bg-[#070A0D] text-slate-100 flex flex-col overflow-x-hidden select-none">
@@ -232,34 +230,40 @@ export default function LiveAuctionStage() {
               <div className="flex items-center gap-4">
                 <div
                   className={`w-14 h-14 rounded-2xl flex items-center justify-center font-black font-mono text-2xl border-2 transition-colors ${
-                    timer <= 5
+                    session.status === "PAUSED"
+                      ? "bg-amber-500/20 border-amber-500 text-amber-400"
+                      : remainingSeconds <= 5
                       ? "bg-red-500/20 border-red-500 text-red-400 animate-ping"
-                      : timer <= 10
+                      : remainingSeconds <= 10
                       ? "bg-amber-500/20 border-amber-500 text-amber-400 animate-pulse"
                       : "bg-emerald-500/20 border-emerald-500 text-emerald-400"
                   }`}
                 >
-                  {timer}s
+                  {session.status === "PAUSED" ? "⏸" : `${remainingSeconds}s`}
                 </div>
                 <div>
-                  <h4 className="text-white font-bold text-base">Auction Countdown</h4>
+                  <h4 className="text-white font-bold text-base">
+                    {session.status === "PAUSED" ? "Auction Paused" : "Auction Countdown"}
+                  </h4>
                   <p className="text-xs text-slate-400">
-                    {timer <= 5
+                    {session.status === "PAUSED"
+                      ? "Timer held by Auctioneer"
+                      : remainingSeconds <= 5
                       ? "Going Three Times! Final Call"
-                      : timer <= 10
+                      : remainingSeconds <= 10
                       ? "Going Once... Going Twice..."
                       : "Open for Competitive Bidding"}
                   </p>
                 </div>
               </div>
 
-              {/* Demo hammer button for testing stage celebration */}
-              <button
-                onClick={triggerSoldCelebration}
-                className="px-4 py-2 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 text-xs font-bold transition-all"
-              >
-                Simulate Sold
-              </button>
+              {/* Real-time status pill (read-only) */}
+              <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-charcoal-950/90 border border-slate-800 text-xs font-semibold">
+                <Radio className={`w-3.5 h-3.5 ${isConnected ? "text-emerald-400 animate-pulse" : "text-amber-400"}`} />
+                <span className={isConnected ? "text-emerald-400" : "text-amber-400 font-mono"}>
+                  {isConnected ? "LIVE SYNCHRONIZED" : "CONNECTING..."}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -276,7 +280,7 @@ export default function LiveAuctionStage() {
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {teams.map((t) => {
+              {liveTeams.map((t) => {
                 const percentSpent = (t.purse.spentAmount / t.purse.totalBudget) * 100;
                 const isLeading = t.id === leadingTeam.id;
 

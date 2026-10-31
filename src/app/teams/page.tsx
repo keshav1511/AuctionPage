@@ -9,10 +9,15 @@ import { Progress } from "@/components/ui/progress";
 import { formatCurrency } from "@/lib/utils";
 import { MOCK_TEAMS } from "@/lib/mock-data/teams";
 import { useLeague } from "@/lib/context/league-context";
+import { useRealtimeAuction } from "@/lib/hooks/use-realtime-auction";
 import { Users } from "lucide-react";
 
 export default function TeamsPage() {
-  const { activeLeague, teams, players } = useLeague();
+  const { activeLeague } = useLeague();
+  const { teams: liveTeams, players: livePlayers } = useRealtimeAuction(activeLeague.id);
+  const teams = liveTeams.length > 0 ? liveTeams : MOCK_TEAMS;
+  const players = livePlayers.length > 0 ? livePlayers : [];
+
   const [selectedTeamId, setSelectedTeamId] = useState<string>(teams[0]?.id || MOCK_TEAMS[0].id);
 
   const selectedTeam = teams.find((t) => t.id === selectedTeamId) || teams[0] || MOCK_TEAMS[0];

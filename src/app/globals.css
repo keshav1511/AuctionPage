@@ -43,6 +43,25 @@ body {
   min-height: 100vh;
 }
 
+/* Ensure inputs, textareas, and select elements display high-contrast, readable text */
+input, select, textarea {
+  color: #0f172a;
+}
+
+/* Ensure dropdown options always render dark readable text on light backgrounds */
+select option {
+  background-color: #ffffff;
+  color: #0f172a;
+}
+
+/* Preserve dark broadcast inputs where explicitly styled with bg-charcoal */
+input.bg-charcoal-900,
+input.bg-charcoal-950,
+select.bg-charcoal-900,
+select.bg-charcoal-950 {
+  color: #f1f5f9;
+}
+
 /* Custom sports theme broadcast glow effects */
 .gold-glow {
   text-shadow: 0 0 20px rgba(245, 158, 11, 0.4), 0 0 40px rgba(245, 158, 11, 0.2);
