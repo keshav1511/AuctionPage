@@ -74,3 +74,27 @@ select.bg-charcoal-950 {
 .stage-gradient {
   background: radial-gradient(circle at 50% 0%, rgba(5, 150, 105, 0.12) 0%, rgba(9, 13, 16, 0.95) 70%);
 }
+
+/* Animated falling stamp with impact, slight rotation and subtle bounce */
+@keyframes stampDrop {
+  0% {
+    opacity: 0;
+    transform: translateY(-220px) scale(2.4) rotate(18deg);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(12px) scale(0.9) rotate(-15deg);
+  }
+  80% {
+    transform: translateY(-6px) scale(1.05) rotate(-10deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(-12deg);
+  }
+}
+
+.animate-stamp-impact {
+  animation: stampDrop 0.65s cubic-bezier(0.25, 1.25, 0.5, 1) forwards;
+}
+

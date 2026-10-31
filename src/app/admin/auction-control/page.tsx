@@ -632,12 +632,16 @@ export default function AuctionControlDesk() {
                   const requiredReserve = analysis?.requiredReserve ?? 0;
                   const maximumBidAllowed = analysis?.maximumBidAllowed ?? remainingPurse;
 
+                  const isCompleted = analysis?.isCompleted ?? (playersPurchased >= minimumSquadSize);
+
                   return (
                     <div
                       key={t.id}
                       className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between ${
                         isLeader
                           ? "border-emerald-600 bg-emerald-50/60 shadow-sm ring-1 ring-emerald-600"
+                          : isCompleted
+                          ? "border-purple-200 bg-purple-50/40 opacity-90 shadow-sm"
                           : !isEligible
                           ? "border-slate-200 bg-slate-50/70 opacity-80"
                           : "border-slate-200 bg-white hover:border-slate-300 shadow-sm"
@@ -657,6 +661,10 @@ export default function AuctionControlDesk() {
                           {isLeader ? (
                             <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-600 text-white tracking-wide">
                               LEADER
+                            </span>
+                          ) : isCompleted ? (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-100 text-purple-800 border border-purple-200 tracking-wide">
+                              SQUAD COMPLETED
                             </span>
                           ) : !isEligible ? (
                             <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-100 text-rose-700 border border-rose-200 tracking-wide">
@@ -684,9 +692,8 @@ export default function AuctionControlDesk() {
 
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-sans text-slate-500">Squad:</span>
-                            <span className="text-slate-700">
-                              {playersPurchased}/{t.purse?.maxPlayers || 18}{" "}
-                              <span className="text-[9px] text-slate-400 font-sans">(Min {minimumSquadSize})</span>
+                            <span className={`font-semibold ${isCompleted ? "text-purple-700" : "text-slate-700"}`}>
+                              {playersPurchased} / {minimumSquadSize} Players
                             </span>
                           </div>
 
@@ -708,7 +715,24 @@ export default function AuctionControlDesk() {
 
                       {/* Action Button / Ineligibility Warning */}
                       <div className="mt-3 pt-2 border-t border-slate-200/60">
-                        {isEligible ? (
+                        {isCompleted ? (
+                          <div
+                            title={`Squad completed (${playersPurchased}/${minimumSquadSize} players required)`}
+                            className="w-full py-1 px-1.5 rounded-lg bg-purple-50 text-purple-700 font-medium text-xs flex flex-col items-center justify-center border border-purple-200/80"
+                          >
+                            <div className="flex items-center justify-between w-full">
+                              <span className="text-[9px] font-bold text-purple-800 uppercase tracking-wide">
+                                Squad Completed
+                              </span>
+                              <span className="text-[8px] font-semibold text-purple-600 uppercase">
+                                {playersPurchased}/{minimumSquadSize}
+                              </span>
+                            </div>
+                            <span className="text-[8px] text-purple-600 truncate w-full text-left font-sans mt-0.5">
+                              Quota reached • Bidding inactive
+                            </span>
+                          </div>
+                        ) : isEligible ? (
                           <button
                             type="button"
                             onClick={() => handleTeamBid(t)}

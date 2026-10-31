@@ -566,7 +566,7 @@ export async function getAuctionStateFromSheets(
         () =>
           sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: `${TAB_AUCTION_STATE}!A2:T2`,
+            range: `${TAB_AUCTION_STATE}!A2:U2`,
           }),
         { operationName: "GetAuctionState" }
       );
@@ -614,7 +614,7 @@ export async function saveAuctionStateToSheets(leagueId: string, state: AuctionS
       () =>
         sheets.spreadsheets.values.update({
           spreadsheetId,
-          range: `${TAB_AUCTION_STATE}!A2:T2`,
+          range: `${TAB_AUCTION_STATE}!A2:U2`,
           valueInputOption: "RAW",
           requestBody: { values },
         }),

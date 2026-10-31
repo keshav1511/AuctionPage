@@ -4,7 +4,16 @@
 // Uses Google Sheets as the single source of truth for persistent data
 // ==============================================================================
 
-import { AuctionSession, Team, Player, AuctionRules, Bid, League, Round2QueueItem } from "@/types";
+import {
+  AuctionSession,
+  Team,
+  Player,
+  AuctionRules,
+  Bid,
+  League,
+  Round2QueueItem,
+  AuctionAnnouncement,
+} from "@/types";
 import { getInitialLeagueById } from "@/lib/mock-data/leagues";
 import {
   getLeagueConfigFromSheets,
@@ -163,6 +172,30 @@ function buildAuctionSession(
     }
   } catch {}
 
+  let announcement: AuctionAnnouncement | null = null;
+  try {
+    if (state.announcementJson) {
+      const parsed = JSON.parse(state.announcementJson);
+      if (parsed && parsed.type && parsed.type !== "NONE") {
+        const nowMs = Date.now();
+        const endsAtMs = parsed.endsAt ? new Date(parsed.endsAt).getTime() : 0;
+        if (nowMs < endsAtMs) {
+          const annPlayer = parsed.playerId
+            ? players.find((p) => p.id === parsed.playerId) || null
+            : null;
+          const annTeam = parsed.winningTeamId
+            ? teams.find((t) => t.id === parsed.winningTeamId) || null
+            : null;
+          announcement = {
+            ...parsed,
+            player: annPlayer,
+            winningTeam: annTeam,
+          };
+        }
+      }
+    }
+  } catch {}
+
   return {
     id: state.id,
     seasonId: state.seasonId,
@@ -180,6 +213,7 @@ function buildAuctionSession(
     round2Queue,
     round2InitializedAt: state.round2InitializedAt,
     round1Completed: state.round1Completed,
+    announcement,
     bidCount: state.bidCount || 0,
     recentBids,
   };
@@ -374,6 +408,15 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
         const teamPurchasedPlayers = players.filter(
           (p) => p.status === "SOLD" && p.soldToTeamId === team.id
         );
+
+        // Module 1: Enforce team squad completion restriction server-side
+        const minSquadSize = team.purse?.minPlayers || rules.minimumSquadSize || 15;
+        if (teamPurchasedPlayers.length >= minSquadSize) {
+          return {
+            success: false,
+            error: `Team ${team.name} has already completed its required squad (${teamPurchasedPlayers.length}/${minSquadSize} players required)`,
+          };
+        }
 
         const bidValidation = validateBidEligibility(team, amount, {
           rules,
@@ -694,6 +737,19 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
             : p
         );
 
+        // Module 2: Authoritative 5-second announcement window
+        const announcementDurationMs = 5000;
+        const announcementEndsAt = new Date(Date.now() + announcementDurationMs).toISOString();
+        const announcementData: AuctionAnnouncement = {
+          type: "SOLD",
+          playerId: soldPlayer.id,
+          winningTeamId: buyerTeam.id,
+          soldPrice: finalPrice,
+          startedAt: nowIso,
+          endsAt: announcementEndsAt,
+        };
+        const announcementJson = JSON.stringify(announcementData);
+
         const initialDuration = rules.initialTimerSeconds || 45;
         let newState: AuctionStateRow;
 
@@ -722,11 +778,12 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
               currentHighestBid: 0,
               currentLeadingTeamId: null,
               timerSeconds: initialDuration,
-              timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
+              timerExpiresAt: new Date(Date.now() + announcementDurationMs + initialDuration * 1000).toISOString(),
               status: "IN_PROGRESS",
               round: 2,
               roundStage: "ROUND_2",
               round2QueueJson: JSON.stringify(updatedQueue),
+              announcementJson,
               bidCount: 0,
             };
           } else {
@@ -741,6 +798,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
               round: 2,
               roundStage: "ROUND_2",
               round2QueueJson: JSON.stringify(updatedQueue),
+              announcementJson,
               bidCount: 0,
             };
           }
@@ -755,10 +813,11 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
               currentHighestBid: 0,
               currentLeadingTeamId: null,
               timerSeconds: initialDuration,
-              timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
+              timerExpiresAt: new Date(Date.now() + announcementDurationMs + initialDuration * 1000).toISOString(),
               status: "IN_PROGRESS",
               round: 1,
               roundStage: "MAIN",
+              announcementJson,
               bidCount: 0,
             };
           } else {
@@ -778,6 +837,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
                 round2QueueJson: JSON.stringify(queue),
                 round2InitializedAt: nowIso,
                 round1Completed: true,
+                announcementJson,
                 bidCount: 0,
               };
             } else {
@@ -792,6 +852,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
                 round: 1,
                 roundStage: "MAIN",
                 round1Completed: true,
+                announcementJson,
                 bidCount: 0,
               };
             }
@@ -846,6 +907,19 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
           p.id === unsoldPlayer.id ? { ...p, status: "UNSOLD" as const } : p
         );
 
+        // Module 2: Authoritative 5-second UNSOLD announcement window
+        const announcementDurationMs = 5000;
+        const announcementEndsAt = new Date(Date.now() + announcementDurationMs).toISOString();
+        const announcementData: AuctionAnnouncement = {
+          type: "UNSOLD",
+          playerId: unsoldPlayer.id,
+          winningTeamId: null,
+          soldPrice: null,
+          startedAt: nowIso,
+          endsAt: announcementEndsAt,
+        };
+        const announcementJson = JSON.stringify(announcementData);
+
         const initialDuration = rules.initialTimerSeconds || 45;
         let newState: AuctionStateRow;
 
@@ -876,11 +950,12 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
               currentHighestBid: 0,
               currentLeadingTeamId: null,
               timerSeconds: initialDuration,
-              timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
+              timerExpiresAt: new Date(Date.now() + announcementDurationMs + initialDuration * 1000).toISOString(),
               status: "IN_PROGRESS",
               round: 2,
               roundStage: "ROUND_2",
               round2QueueJson: JSON.stringify(updatedQueue),
+              announcementJson,
               bidCount: 0,
             };
           } else {
@@ -895,6 +970,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
               round: 2,
               roundStage: "ROUND_2",
               round2QueueJson: JSON.stringify(updatedQueue),
+              announcementJson,
               bidCount: 0,
             };
           }
@@ -909,10 +985,11 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
               currentHighestBid: 0,
               currentLeadingTeamId: null,
               timerSeconds: initialDuration,
-              timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
+              timerExpiresAt: new Date(Date.now() + announcementDurationMs + initialDuration * 1000).toISOString(),
               status: "IN_PROGRESS",
               round: 1,
               roundStage: "MAIN",
+              announcementJson,
               bidCount: 0,
             };
           } else {
@@ -932,6 +1009,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
                 round2QueueJson: JSON.stringify(queue),
                 round2InitializedAt: nowIso,
                 round1Completed: true,
+                announcementJson,
                 bidCount: 0,
               };
             } else {
@@ -945,6 +1023,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
                 round: 1,
                 roundStage: "MAIN",
                 round1Completed: true,
+                announcementJson,
                 bidCount: 0,
               };
             }
@@ -1019,6 +1098,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
           bidCount: Math.max(0, (state.bidCount || 1) - 1),
           timerSeconds: extensionSeconds,
           timerExpiresAt: restoredExpiry,
+          announcementJson: "",
         };
 
         const auditEntry: AuditLogEntry = {

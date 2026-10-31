@@ -144,13 +144,24 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
     }
 
     const interval = setInterval(() => {
+      const now = Date.now();
+      const annEndsAt = session.announcement?.endsAt
+        ? new Date(session.announcement.endsAt).getTime()
+        : 0;
+
+      // If an authoritative announcement is still active, freeze the bidding timer at its initial duration
+      if (annEndsAt > now) {
+        setRemainingSeconds(session.timerSeconds || 45);
+        return;
+      }
+
       const expiresAtMs = new Date(session.timerExpiresAt!).getTime();
-      const diff = Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
+      const diff = Math.max(0, Math.ceil((expiresAtMs - now) / 1000));
       setRemainingSeconds(diff);
     }, 250);
 
     return () => clearInterval(interval);
-  }, [session.timerExpiresAt, session.status, session.timerSeconds]);
+  }, [session.timerExpiresAt, session.status, session.timerSeconds, session.announcement?.endsAt]);
 
   // 5. Action Dispatchers (send commands to server which commits to Google Sheets)
   const sendAction = useCallback(

@@ -24,6 +24,14 @@ export interface BrandingPalette {
   text: string;
 }
 
+export interface BackgroundCustomization {
+  imageUrl?: string;
+  driveFileId?: string;
+  position?: 'center' | 'top' | 'bottom';
+  scale?: 'cover' | 'contain' | 'fill';
+  overlayOpacity?: number; // 0 to 100
+}
+
 export interface League {
   id: string;
   slug: string;
@@ -40,6 +48,7 @@ export interface League {
   primaryColor: string;
   secondaryColor: string;
   brandingPalette?: BrandingPalette;
+  backgroundConfig?: BackgroundCustomization;
   created_at?: string;
 }
 
@@ -142,6 +151,17 @@ export interface Round2QueueItem {
   status: "PENDING" | "SOLD" | "UNSOLD";
 }
 
+export interface AuctionAnnouncement {
+  type: 'NONE' | 'SOLD' | 'UNSOLD';
+  playerId?: string | null;
+  player?: Player | null;
+  winningTeamId?: string | null;
+  winningTeam?: Team | null;
+  soldPrice?: number | null;
+  startedAt: string;
+  endsAt: string;
+}
+
 export interface AuctionSession {
   id: string;
   seasonId: string;
@@ -160,6 +180,7 @@ export interface AuctionSession {
   round2Queue?: Round2QueueItem[];
   round2InitializedAt?: string;
   round1Completed?: boolean;
+  announcement?: AuctionAnnouncement | null;
   bidCount: number;
   recentBids: Bid[];
 }

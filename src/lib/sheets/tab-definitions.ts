@@ -59,6 +59,11 @@ export const LEAGUE_CONFIG_HEADERS = [
 ];
 
 export function serializeLeagueConfig(league: League, rules?: AuctionRules): string[] {
+  const brandingWithBackground = {
+    ...(league.brandingPalette || {}),
+    backgroundConfig: league.backgroundConfig,
+  };
+
   return [
     league.id || "",
     league.slug || "",
@@ -74,7 +79,7 @@ export function serializeLeagueConfig(league: League, rules?: AuctionRules): str
     league.googleDriveFolderUrl || "",
     league.primaryColor || "#059669",
     league.secondaryColor || "#F59E0B",
-    JSON.stringify(league.brandingPalette || {}),
+    JSON.stringify(brandingWithBackground),
     JSON.stringify(rules || {}),
     new Date().toISOString(),
   ];
@@ -84,8 +89,15 @@ export function deserializeLeagueConfig(row: (string | undefined)[]): { league: 
   if (!row || row.length < 3 || !row[0]) return null;
 
   let brandingPalette: BrandingPalette | undefined;
+  let backgroundConfig: League["backgroundConfig"] = undefined;
   try {
-    if (row[14]) brandingPalette = JSON.parse(row[14]);
+    if (row[14]) {
+      const parsed = JSON.parse(row[14]);
+      brandingPalette = parsed;
+      if (parsed.backgroundConfig) {
+        backgroundConfig = parsed.backgroundConfig;
+      }
+    }
   } catch {}
 
   let rules: AuctionRules | undefined;
@@ -109,6 +121,7 @@ export function deserializeLeagueConfig(row: (string | undefined)[]): { league: 
     primaryColor: row[12] || "#059669",
     secondaryColor: row[13] || "#F59E0B",
     brandingPalette,
+    backgroundConfig,
     created_at: row[16] || new Date().toISOString(),
   };
 
@@ -332,6 +345,7 @@ export const AUCTION_STATE_HEADERS = [
   "round2QueueJson",
   "round2InitializedAt",
   "round1Completed",
+  "announcementJson",
 ];
 
 export interface AuctionStateRow {
@@ -355,6 +369,7 @@ export interface AuctionStateRow {
   round2QueueJson?: string;
   round2InitializedAt?: string;
   round1Completed?: boolean;
+  announcementJson?: string;
 }
 
 export function serializeAuctionState(state: AuctionStateRow): string[] {
@@ -379,6 +394,7 @@ export function serializeAuctionState(state: AuctionStateRow): string[] {
     state.round2QueueJson || "[]",
     state.round2InitializedAt || "",
     state.round1Completed ? "TRUE" : "FALSE",
+    state.announcementJson || "",
   ];
 }
 
@@ -406,6 +422,7 @@ export function deserializeAuctionState(row: (string | undefined)[]): AuctionSta
     round2QueueJson: row[17] || "[]",
     round2InitializedAt: row[18] || "",
     round1Completed: row[19] === "TRUE" || row[19] === "true",
+    announcementJson: row[20] || undefined,
   };
 }
 

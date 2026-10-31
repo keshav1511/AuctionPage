@@ -115,6 +115,9 @@ export interface TeamPurseReserveAnalysis extends PurseReserveCalculationResult 
   ineligibilityReason?: string;
   isCurrentLeader: boolean;
   nextBidAmount: number;
+  isCompleted: boolean;
+  requiredSquadSize: number;
+  completionStatus: 'INCOMPLETE' | 'COMPLETED';
 }
 
 /**
@@ -173,12 +176,16 @@ export function analyzeTeamBiddingEligibility(
   });
 
   const remainingPlayersRequired = Math.max(0, minimumSquadSize - playersPurchased);
+  const isCompleted = playersPurchased >= minimumSquadSize;
 
   // Evaluate Eligibility
   let isEligibleToBid = true;
   let ineligibilityReason: string | undefined = undefined;
 
-  if (isCurrentLeadingTeam) {
+  if (isCompleted) {
+    isEligibleToBid = false;
+    ineligibilityReason = `Squad completed (${playersPurchased}/${minimumSquadSize} players required)`;
+  } else if (isCurrentLeadingTeam) {
     isEligibleToBid = false;
     ineligibilityReason = "Already leading current highest bid";
   } else if (playersPurchased >= maxSquadSize) {
@@ -219,6 +226,9 @@ export function analyzeTeamBiddingEligibility(
     ineligibilityReason,
     isCurrentLeader: isCurrentLeadingTeam,
     nextBidAmount,
+    isCompleted,
+    requiredSquadSize: minimumSquadSize,
+    completionStatus: isCompleted ? "COMPLETED" : "INCOMPLETE",
   };
 }
 

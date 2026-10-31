@@ -23,13 +23,26 @@ import {
   Users,
   Search,
   ArrowRight,
+  Image as ImageIcon,
+  RotateCcw,
+  Sliders,
 } from "lucide-react";
 import Link from "next/link";
 
 export default function AdminSettingsPage() {
-  const { activeLeague, players, updatePlayer, auctionRules, updateAuctionRules } = useLeague();
+  const { activeLeague, updateLeague, players, updatePlayer, auctionRules, updateAuctionRules } = useLeague();
   const [savedNotice, setSavedNotice] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+
+  // Background Customization
+  const [bgImageUrl, setBgImageUrl] = useState<string>(activeLeague.backgroundConfig?.imageUrl || "");
+  const [bgDriveId, setBgDriveId] = useState<string>(activeLeague.backgroundConfig?.driveFileId || "");
+  const [bgPosition, setBgPosition] = useState<'center' | 'top' | 'bottom'>(activeLeague.backgroundConfig?.position || "center");
+  const [bgScale, setBgScale] = useState<'cover' | 'contain' | 'fill'>(activeLeague.backgroundConfig?.scale || "cover");
+  const [bgOverlayOpacity, setBgOverlayOpacity] = useState<number>(
+    activeLeague.backgroundConfig?.overlayOpacity != null ? activeLeague.backgroundConfig.overlayOpacity : 50
+  );
+  const [bgSavedNotice, setBgSavedNotice] = useState(false);
 
   // Timers
   const [initialCountdown, setInitialCountdown] = useState<number>(auctionRules.initialTimerSeconds || 45);
@@ -470,6 +483,203 @@ export default function AdminSettingsPage() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Card 6: Public Stage Background Customization */}
+            <Card className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
+              <CardContent className="p-6 space-y-5">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                      <ImageIcon className="w-4 h-4 text-emerald-600" /> Public Stage Background Customization
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Configure the background image and dark intensity for the live spectator screen (/live), player announcements, and tournament finale.
+                    </p>
+                  </div>
+
+                  {bgSavedNotice && (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full font-medium border border-emerald-200">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Background Saved!
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Controls */}
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Google Drive File ID or Image URL
+                      </label>
+                      <Input
+                        value={bgImageUrl || bgDriveId}
+                        onChange={(e) => {
+                          const val = e.target.value.trim();
+                          if (val.startsWith("http")) {
+                            setBgImageUrl(val);
+                            setBgDriveId("");
+                          } else {
+                            setBgDriveId(val);
+                            setBgImageUrl(val ? `https://lh3.googleusercontent.com/d/${val}` : "");
+                          }
+                        }}
+                        placeholder="e.g. 1MtjUStUIqnlQic13... or https://..."
+                        className="bg-white border-slate-300 font-mono text-xs"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Paste a public image link or a Google Drive file ID from your tournament asset folder.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Positioning
+                        </label>
+                        <select
+                          value={bgPosition}
+                          onChange={(e) => setBgPosition(e.target.value as 'center' | 'top' | 'bottom')}
+                          className="w-full h-9 rounded-md border border-slate-300 bg-white px-3 py-1 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        >
+                          <option value="center">Center</option>
+                          <option value="top">Top</option>
+                          <option value="bottom">Bottom</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Image Scaling
+                        </label>
+                        <select
+                          value={bgScale}
+                          onChange={(e) => setBgScale(e.target.value as 'cover' | 'contain' | 'fill')}
+                          className="w-full h-9 rounded-md border border-slate-300 bg-white px-3 py-1 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        >
+                          <option value="cover">Cover (Fill screen)</option>
+                          <option value="contain">Contain (Fit screen)</option>
+                          <option value="fill">Fill (Stretch)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between text-xs mb-1">
+                        <label className="font-semibold text-slate-700 flex items-center gap-1.5">
+                          <Sliders className="w-3.5 h-3.5 text-slate-500" /> Dark Overlay Intensity:
+                        </label>
+                        <span className="font-mono font-bold text-slate-900">{bgOverlayOpacity}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="90"
+                        step="5"
+                        value={bgOverlayOpacity}
+                        onChange={(e) => setBgOverlayOpacity(parseInt(e.target.value, 10))}
+                        className="w-full accent-emerald-600 cursor-pointer"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Controls contrast overlay for player readability on TV broadcasts and projectors.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-2">
+                      <Button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          let effectiveUrl = bgImageUrl;
+                          if (bgDriveId && !effectiveUrl) {
+                            const cleanId = bgDriveId.replace(/.*folders\//, "").replace(/.*id=/, "").trim();
+                            effectiveUrl = `https://lh3.googleusercontent.com/d/${cleanId}`;
+                          }
+
+                          updateLeague(activeLeague.id, {
+                            backgroundConfig: {
+                              imageUrl: effectiveUrl,
+                              driveFileId: bgDriveId,
+                              position: bgPosition,
+                              scale: bgScale,
+                              overlayOpacity: bgOverlayOpacity,
+                            },
+                          });
+                          setBgSavedNotice(true);
+                          setTimeout(() => setBgSavedNotice(false), 3000);
+                        }}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs py-1.5 px-4 shadow-sm gap-1.5"
+                      >
+                        <Save className="w-3.5 h-3.5" /> Save Background
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setBgImageUrl("");
+                          setBgDriveId("");
+                          setBgPosition("center");
+                          setBgScale("cover");
+                          setBgOverlayOpacity(50);
+                          updateLeague(activeLeague.id, {
+                            backgroundConfig: undefined,
+                          });
+                          setBgSavedNotice(true);
+                          setTimeout(() => setBgSavedNotice(false), 3000);
+                        }}
+                        className="border-slate-300 text-slate-700 hover:bg-slate-100 font-medium text-xs py-1.5 px-3 gap-1.5"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" /> Restore Default
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Live Preview Card */}
+                  <div className="space-y-2">
+                    <span className="block text-xs font-semibold text-slate-700">Live Stage Preview</span>
+                    <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-slate-300 shadow-inner bg-[#070A0D] flex flex-col justify-between p-3 select-none">
+                      {/* Background Image layer */}
+                      {bgImageUrl ? (
+                        <div
+                          className="absolute inset-0 z-0"
+                          style={{
+                            backgroundImage: `url(${bgImageUrl})`,
+                            backgroundPosition: bgPosition,
+                            backgroundSize: bgScale === "fill" ? "100% 100%" : bgScale,
+                            backgroundRepeat: "no-repeat",
+                          }}
+                        />
+                      ) : (
+                        <div className="absolute inset-0 z-0 bg-gradient-to-br from-slate-950 via-[#0B0F15] to-emerald-950/40" />
+                      )}
+
+                      {/* Dark Overlay layer */}
+                      <div
+                        className="absolute inset-0 z-[1] transition-opacity pointer-events-none"
+                        style={{ backgroundColor: `rgba(0, 0, 0, ${bgOverlayOpacity / 100})` }}
+                      />
+
+                      {/* Mockup Broadcast elements */}
+                      <div className="relative z-10 flex items-center justify-between text-[10px] text-slate-300">
+                        <span className="font-bold uppercase tracking-wider text-amber-400">NTL Auction Live</span>
+                        <span className="font-mono bg-red-600/80 text-white px-1.5 py-0.5 rounded font-black">LIVE</span>
+                      </div>
+
+                      <div className="relative z-10 text-center space-y-1">
+                        <div className="text-[9px] uppercase font-bold text-slate-400">Active Lot Preview</div>
+                        <div className="text-sm font-black text-white uppercase tracking-tight">Rohan Sharma</div>
+                        <div className="font-mono text-emerald-400 font-bold text-xs">₹2,50,000</div>
+                      </div>
+
+                      <div className="relative z-10 flex items-center justify-between text-[8px] text-slate-400 border-t border-white/10 pt-1">
+                        <span>Overlay: {bgOverlayOpacity}%</span>
+                        <span className="capitalize">{bgPosition} • {bgScale}</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>
