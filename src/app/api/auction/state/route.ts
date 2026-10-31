@@ -9,6 +9,12 @@ export async function GET(req: NextRequest) {
     const leagueId = searchParams.get("leagueId") || "league-ntl";
 
     const state = getAuthoritativeLeagueState(leagueId);
+    if (!state) {
+      return NextResponse.json(
+        { success: false, error: `League with ID "${leagueId}" not found` },
+        { status: 404 }
+      );
+    }
 
     return NextResponse.json({
       success: true,

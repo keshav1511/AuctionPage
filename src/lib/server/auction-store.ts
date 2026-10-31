@@ -8,7 +8,7 @@ import { AuctionSession, Team, Player, AuctionRules, Bid, League } from "@/types
 import { MOCK_TEAMS } from "@/lib/mock-data/teams";
 import { MOCK_PLAYERS } from "@/lib/mock-data/players";
 import { MOCK_RULES, MOCK_AUCTION_SESSION } from "@/lib/mock-data/auction";
-import { INITIAL_LEAGUES } from "@/lib/context/league-context";
+import { getInitialLeagueById } from "@/lib/mock-data/leagues";
 
 export type AuctionActionType =
   | "PLACE_BID"
@@ -54,7 +54,7 @@ export interface AuctionRealtimeEvent {
   };
 }
 
-interface LeagueState {
+export interface LeagueState {
   league: League;
   session: AuctionSession;
   teams: Team[];
@@ -81,28 +81,23 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 /**
- * Initializes or retrieves authoritative state for a league
+ * Registers or initializes a league with custom/new configuration
  */
-export function getAuthoritativeLeagueState(leagueId: string): LeagueState {
-  if (!globalState.leagues.has(leagueId)) {
-    const baseLeague = INITIAL_LEAGUES.find((l) => l.id === leagueId) || {
-      ...INITIAL_LEAGUES[0],
-      id: leagueId,
-    };
-
+export function registerLeagueState(league: League): LeagueState {
+  if (!globalState.leagues.has(league.id)) {
     const initialTeams = MOCK_TEAMS.map((t) => ({
       ...t,
-      seasonId: leagueId,
+      seasonId: league.id,
     }));
 
     const initialPlayers = MOCK_PLAYERS.map((p) => ({
       ...p,
-      seasonId: leagueId,
+      seasonId: league.id,
     }));
 
     const initialRules: AuctionRules = {
       ...MOCK_RULES,
-      seasonId: leagueId,
+      seasonId: league.id,
       initialTimerSeconds: MOCK_RULES.initialTimerSeconds || 45,
       bidExtensionSeconds: MOCK_RULES.bidExtensionSeconds || 10,
     };
@@ -110,8 +105,8 @@ export function getAuthoritativeLeagueState(leagueId: string): LeagueState {
     const firstPlayer = initialPlayers[0];
     const initialSession: AuctionSession = {
       ...MOCK_AUCTION_SESSION,
-      id: `auction-${leagueId}`,
-      seasonId: leagueId,
+      id: `auction-${league.id}`,
+      seasonId: league.id,
       currentPlayerId: firstPlayer ? firstPlayer.id : null,
       currentPlayer: firstPlayer || null,
       currentHighestBid: 0,
@@ -125,16 +120,42 @@ export function getAuthoritativeLeagueState(leagueId: string): LeagueState {
       recentBids: [],
     };
 
-    globalState.leagues.set(leagueId, {
-      league: baseLeague,
+    const newState: LeagueState = {
+      league,
       session: initialSession,
       teams: initialTeams,
       players: initialPlayers,
       rules: initialRules,
-    });
+    };
+
+    globalState.leagues.set(league.id, newState);
+    return newState;
   }
 
-  return globalState.leagues.get(leagueId)!;
+  const existingState = globalState.leagues.get(league.id)!;
+  existingState.league = { ...existingState.league, ...league };
+  return existingState;
+}
+
+/**
+ * Retrieves authoritative state for a league.
+ * Returns null if the league does not exist and is not configured in INITIAL_LEAGUES.
+ */
+export function getAuthoritativeLeagueState(leagueId: string): LeagueState | null {
+  if (!leagueId || typeof leagueId !== "string") {
+    return null;
+  }
+
+  if (globalState.leagues.has(leagueId)) {
+    return globalState.leagues.get(leagueId)!;
+  }
+
+  const baseLeague = getInitialLeagueById(leagueId);
+  if (!baseLeague) {
+    return null;
+  }
+
+  return registerLeagueState(baseLeague);
 }
 
 /**
@@ -179,10 +200,38 @@ export function processAuctionAction(payload: AuctionActionPayload): {
   success: boolean;
   message?: string;
   error?: string;
-  state: LeagueState;
+  state?: LeagueState;
 } {
   const { leagueId, type } = payload;
-  const state = getAuthoritativeLeagueState(leagueId);
+  let state = getAuthoritativeLeagueState(leagueId);
+
+  // If league doesn't exist yet, check if action is UPDATE_LEAGUE with a valid league definition
+  if (!state) {
+    if (type === "UPDATE_LEAGUE" && payload.league && payload.league.name) {
+      const newLeague: League = {
+        id: leagueId,
+        slug: payload.league.slug || leagueId.replace(/^league-/, ""),
+        name: payload.league.name,
+        description: payload.league.description || "",
+        logoUrl: payload.league.logoUrl || "",
+        matchDate: payload.league.matchDate || new Date().toISOString().split("T")[0],
+        matchVenue: payload.league.matchVenue || "Venue TBD",
+        auctionDate: payload.league.auctionDate || new Date().toISOString().split("T")[0],
+        auctionTime: payload.league.auctionTime || "18:00",
+        timezone: payload.league.timezone || "Asia/Kolkata",
+        primaryColor: payload.league.primaryColor || "#059669",
+        secondaryColor: payload.league.secondaryColor || "#F59E0B",
+        ...payload.league,
+      };
+      state = registerLeagueState(newLeague);
+    } else {
+      return {
+        success: false,
+        error: `League with ID "${leagueId}" not found in authoritative auction store`,
+      };
+    }
+  }
+
   const nowIso = new Date().toISOString();
 
   switch (type) {

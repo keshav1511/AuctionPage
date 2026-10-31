@@ -7,13 +7,20 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const leagueId = searchParams.get("leagueId") || "league-ntl";
 
+  const state = getAuthoritativeLeagueState(leagueId);
+  if (!state) {
+    return new Response(JSON.stringify({ error: `League with ID "${leagueId}" not found` }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
     start(controller) {
       // 1. Send initial authoritative state sync immediately on connect
       try {
-        const state = getAuthoritativeLeagueState(leagueId);
         const initialEvent: AuctionRealtimeEvent = {
           type: "INITIAL_SYNC",
           leagueId,

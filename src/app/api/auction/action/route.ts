@@ -17,24 +17,25 @@ export async function POST(req: NextRequest) {
     const result = processAuctionAction(payload);
 
     if (!result.success) {
+      const isNotFound = Boolean(result.error && result.error.includes("not found"));
       return NextResponse.json(
         {
           success: false,
           error: result.error || "Action validation failed",
-          session: result.state.session,
+          session: result.state?.session || null,
         },
-        { status: 400 }
+        { status: isNotFound ? 404 : 400 }
       );
     }
 
     return NextResponse.json({
       success: true,
       message: result.message,
-      session: result.state.session,
-      teams: result.state.teams,
-      players: result.state.players,
-      rules: result.state.rules,
-      league: result.state.league,
+      session: result.state?.session,
+      teams: result.state?.teams,
+      players: result.state?.players,
+      rules: result.state?.rules,
+      league: result.state?.league,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
