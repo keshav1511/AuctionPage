@@ -188,6 +188,9 @@ function getOrCreateMemoryMirror(leagueId: string): InMemoryLeagueMirror {
       timerSeconds: initialRules.initialTimerSeconds || 45,
       timerExpiresAt: new Date(Date.now() + (initialRules.initialTimerSeconds || 45) * 1000).toISOString(),
       round: 1,
+      roundStage: "MAIN",
+      round2QueueJson: "[]",
+      round1Completed: false,
       bidCount: 0,
       bidExtensionSeconds: initialRules.bidExtensionSeconds || 10,
       version: 1,
@@ -563,7 +566,7 @@ export async function getAuctionStateFromSheets(
         () =>
           sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: `${TAB_AUCTION_STATE}!A2:P2`,
+            range: `${TAB_AUCTION_STATE}!A2:T2`,
           }),
         { operationName: "GetAuctionState" }
       );
@@ -611,7 +614,7 @@ export async function saveAuctionStateToSheets(leagueId: string, state: AuctionS
       () =>
         sheets.spreadsheets.values.update({
           spreadsheetId,
-          range: `${TAB_AUCTION_STATE}!A2:P2`,
+          range: `${TAB_AUCTION_STATE}!A2:T2`,
           valueInputOption: "RAW",
           requestBody: { values },
         }),

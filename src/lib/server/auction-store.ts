@@ -4,7 +4,7 @@
 // Uses Google Sheets as the single source of truth for persistent data
 // ==============================================================================
 
-import { AuctionSession, Team, Player, AuctionRules, Bid, League } from "@/types";
+import { AuctionSession, Team, Player, AuctionRules, Bid, League, Round2QueueItem } from "@/types";
 import { getInitialLeagueById } from "@/lib/mock-data/leagues";
 import {
   getLeagueConfigFromSheets,
@@ -20,6 +20,11 @@ import {
 } from "@/lib/sheets/google-sheets-repository";
 import { AuctionStateRow, PurchaseRecord, AuditLogEntry } from "@/lib/sheets/tab-definitions";
 import { validateBidEligibility } from "@/lib/auction/purse-validator";
+import {
+  detectRound1Completion,
+  getEligibleRound2Players,
+  createRound2Queue,
+} from "@/lib/auction/round-manager";
 
 export type AuctionActionType =
   | "PLACE_BID"
@@ -29,6 +34,8 @@ export type AuctionActionType =
   | "PAUSE_RESUME"
   | "UNDO"
   | "RESET_LOT"
+  | "INIT_ROUND_2"
+  | "START_ROUND_2"
   | "UPDATE_TEAMS"
   | "UPDATE_PLAYERS"
   | "UPDATE_RULES"
@@ -144,6 +151,18 @@ function buildAuctionSession(
     ? teams.find((t) => t.id === state.currentLeadingTeamId) || null
     : null;
 
+  let round2Queue: Round2QueueItem[] | undefined;
+  try {
+    if (state.round2QueueJson) {
+      const parsed = JSON.parse(state.round2QueueJson);
+      if (Array.isArray(parsed)) {
+        round2Queue = parsed.map((item) =>
+          typeof item === "string" ? { id: item, status: "PENDING" as const } : item
+        );
+      }
+    }
+  } catch {}
+
   return {
     id: state.id,
     seasonId: state.seasonId,
@@ -157,6 +176,10 @@ function buildAuctionSession(
     timerExpiresAt: state.timerExpiresAt,
     bidExtensionSeconds: state.bidExtensionSeconds || rules.bidExtensionSeconds || 10,
     round: state.round || 1,
+    roundStage: state.roundStage || (state.round === 2 ? "ROUND_2" : "MAIN"),
+    round2Queue,
+    round2InitializedAt: state.round2InitializedAt,
+    round1Completed: state.round1Completed,
     bidCount: state.bidCount || 0,
     recentBids,
   };
@@ -416,14 +439,34 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
         const { playerId } = payload;
         let targetPlayer: Player | undefined;
 
-        if (playerId) {
-          targetPlayer = players.find((p) => p.id === playerId);
-        } else {
-          targetPlayer = players.find((p) => p.status === "AVAILABLE") || players[0];
-        }
+        if (state.round === 2) {
+          let queue: Round2QueueItem[] = [];
+          try {
+            if (state.round2QueueJson) queue = JSON.parse(state.round2QueueJson);
+          } catch {}
 
-        if (!targetPlayer) {
-          return { success: false, error: "No players available to spotlight" };
+          if (playerId) {
+            targetPlayer = players.find((p) => p.id === playerId);
+          } else {
+            const nextPending = queue.find((item) => item.status === "PENDING");
+            if (nextPending) {
+              targetPlayer = players.find((p) => p.id === nextPending.id);
+            }
+          }
+
+          if (!targetPlayer) {
+            return { success: false, error: "No pending players available in Round 2 queue" };
+          }
+        } else {
+          if (playerId) {
+            targetPlayer = players.find((p) => p.id === playerId);
+          } else {
+            targetPlayer = players.find((p) => p.status === "AVAILABLE") || players[0];
+          }
+
+          if (!targetPlayer) {
+            return { success: false, error: "No players available to spotlight" };
+          }
         }
 
         const initialDuration = rules.initialTimerSeconds || 45;
@@ -434,7 +477,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
           p.id === targetPlayer!.id
             ? { ...p, status: "ON_AUCTION" as const }
             : p.status === "ON_AUCTION"
-            ? { ...p, status: "AVAILABLE" as const }
+            ? (state.round === 2 ? { ...p, status: "UNSOLD" as const } : { ...p, status: "AVAILABLE" as const })
             : p
         );
 
@@ -446,6 +489,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
           timerSeconds: initialDuration,
           timerExpiresAt: expiryIso,
           status: "IN_PROGRESS",
+          roundStage: state.round === 2 ? "ROUND_2" : "MAIN",
           bidCount: 0,
         };
 
@@ -454,13 +498,144 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
           seasonId: leagueId,
           actionType: "LOT_SELECTED",
           actor: "AUCTIONEER",
-          detailsJson: JSON.stringify({ player: targetPlayer.fullName, basePrice }),
+          detailsJson: JSON.stringify({ player: targetPlayer.fullName, basePrice, round: state.round || 1 }),
           timestamp: nowIso,
         };
 
         return {
           success: true,
           message: `Spotlighted ${targetPlayer.fullName} (Base: ₹${basePrice.toLocaleString()})`,
+          newState,
+          updatedPlayers,
+          auditEntry,
+        };
+      }
+
+      case "INIT_ROUND_2": {
+        // Idempotency: If Round 2 queue already exists, do not re-randomize or duplicate
+        let existingQueue: Round2QueueItem[] = [];
+        try {
+          if (state.round2QueueJson) existingQueue = JSON.parse(state.round2QueueJson);
+        } catch {}
+
+        if (state.round === 2 && existingQueue.length > 0) {
+          return {
+            success: true,
+            message: "Round 2 queue is already initialized",
+            newState: state,
+          };
+        }
+
+        const isR1Done = detectRound1Completion(players);
+        if (!isR1Done) {
+          return {
+            success: false,
+            error: "Cannot initialize Round 2: First-round players are still pending or on auction",
+          };
+        }
+
+        const eligibleUnsold = getEligibleRound2Players(players);
+        if (eligibleUnsold.length === 0) {
+          return {
+            success: false,
+            error: "No unsold players eligible for Round 2. All players were sold!",
+          };
+        }
+
+        const { queue } = createRound2Queue(eligibleUnsold);
+        const newState: AuctionStateRow = {
+          ...state,
+          currentPlayerId: null,
+          currentHighestBid: 0,
+          currentLeadingTeamId: null,
+          timerSeconds: 0,
+          status: "PAUSED",
+          round: 2,
+          roundStage: "ROUND_2_TRANSITION",
+          round2QueueJson: JSON.stringify(queue),
+          round2InitializedAt: nowIso,
+          round1Completed: true,
+          bidCount: 0,
+        };
+
+        const auditEntry: AuditLogEntry = {
+          id: `audit-${Date.now()}`,
+          seasonId: leagueId,
+          actionType: "ROUND_INITIALIZED",
+          actor: "AUCTIONEER",
+          detailsJson: JSON.stringify({ round: 2, eligibleCount: eligibleUnsold.length }),
+          timestamp: nowIso,
+        };
+
+        return {
+          success: true,
+          message: `ROUND 2 initialized with ${eligibleUnsold.length} unsold players`,
+          newState,
+          auditEntry,
+        };
+      }
+
+      case "START_ROUND_2": {
+        let queue: Round2QueueItem[] = [];
+        try {
+          if (state.round2QueueJson) queue = JSON.parse(state.round2QueueJson);
+        } catch {}
+
+        if (queue.length === 0) {
+          const eligibleUnsold = getEligibleRound2Players(players);
+          if (eligibleUnsold.length === 0) {
+            return { success: false, error: "No unsold players available for Round 2" };
+          }
+          const created = createRound2Queue(eligibleUnsold);
+          queue = created.queue;
+        }
+
+        const firstPending = queue.find((item) => item.status === "PENDING");
+        if (!firstPending) {
+          return { success: false, error: "No pending players in Round 2 queue" };
+        }
+
+        const targetPlayer = players.find((p) => p.id === firstPending.id);
+        if (!targetPlayer) {
+          return { success: false, error: "First Round 2 player not found in roster" };
+        }
+
+        const initialDuration = rules.initialTimerSeconds || 45;
+        const expiryIso = new Date(Date.now() + initialDuration * 1000).toISOString();
+        const basePrice = targetPlayer.basePriceOverride || targetPlayer.basePrice || 25000;
+
+        const updatedPlayers = players.map((p) =>
+          p.id === targetPlayer.id ? { ...p, status: "ON_AUCTION" as const } : p
+        );
+
+        const newState: AuctionStateRow = {
+          ...state,
+          currentPlayerId: targetPlayer.id,
+          currentHighestBid: 0,
+          currentLeadingTeamId: null,
+          timerSeconds: initialDuration,
+          timerExpiresAt: expiryIso,
+          status: "IN_PROGRESS",
+          round: 2,
+          roundStage: "ROUND_2",
+          round2QueueJson: JSON.stringify(queue),
+          round2InitializedAt: state.round2InitializedAt || nowIso,
+          round1Completed: true,
+          bidCount: 0,
+        };
+
+        const auditEntry: AuditLogEntry = {
+          id: `audit-${Date.now()}`,
+          seasonId: leagueId,
+          actionType: "ROUND_2_STARTED",
+          actor: "AUCTIONEER",
+          detailsJson: JSON.stringify({ player: targetPlayer.fullName, basePrice }),
+          timestamp: nowIso,
+        };
+
+        return {
+          success: true,
+          message: `ROUND 2 started with ${targetPlayer.fullName}`,
           newState,
           updatedPlayers,
           auditEntry,
@@ -519,21 +694,109 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
             : p
         );
 
-        // Find next AVAILABLE player
-        const nextPlayer = updatedPlayers.find((p) => p.status === "AVAILABLE");
         const initialDuration = rules.initialTimerSeconds || 45;
+        let newState: AuctionStateRow;
 
-        const newState: AuctionStateRow = {
-          ...state,
-          currentPlayerId: nextPlayer ? nextPlayer.id : null,
-          currentHighestBid: 0,
-          currentLeadingTeamId: null,
-          timerSeconds: initialDuration,
-          timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
-          status: nextPlayer ? "IN_PROGRESS" : "FINISHED",
-          bidCount: 0,
-          round: state.round || 1,
-        };
+        if (state.round === 2) {
+          // --- ROUND 2 LOT RESOLUTION ---
+          let queue: Round2QueueItem[] = [];
+          try {
+            if (state.round2QueueJson) queue = JSON.parse(state.round2QueueJson);
+          } catch {}
+
+          const updatedQueue = queue.map((item) =>
+            item.id === soldPlayer.id ? { ...item, status: "SOLD" as const } : item
+          );
+
+          const nextPending = updatedQueue.find((item) => item.status === "PENDING");
+          const nextPlayer = nextPending ? updatedPlayers.find((p) => p.id === nextPending.id) : null;
+
+          if (nextPlayer) {
+            updatedPlayers.forEach((p) => {
+              if (p.id === nextPlayer.id) p.status = "ON_AUCTION";
+            });
+
+            newState = {
+              ...state,
+              currentPlayerId: nextPlayer.id,
+              currentHighestBid: 0,
+              currentLeadingTeamId: null,
+              timerSeconds: initialDuration,
+              timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
+              status: "IN_PROGRESS",
+              round: 2,
+              roundStage: "ROUND_2",
+              round2QueueJson: JSON.stringify(updatedQueue),
+              bidCount: 0,
+            };
+          } else {
+            // Round 2 complete! No Round 3.
+            newState = {
+              ...state,
+              currentPlayerId: null,
+              currentHighestBid: 0,
+              currentLeadingTeamId: null,
+              timerSeconds: 0,
+              status: "FINISHED",
+              round: 2,
+              roundStage: "ROUND_2",
+              round2QueueJson: JSON.stringify(updatedQueue),
+              bidCount: 0,
+            };
+          }
+        } else {
+          // --- ROUND 1 LOT RESOLUTION ---
+          const nextPlayer = updatedPlayers.find((p) => p.status === "AVAILABLE");
+
+          if (nextPlayer) {
+            newState = {
+              ...state,
+              currentPlayerId: nextPlayer.id,
+              currentHighestBid: 0,
+              currentLeadingTeamId: null,
+              timerSeconds: initialDuration,
+              timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
+              status: "IN_PROGRESS",
+              round: 1,
+              roundStage: "MAIN",
+              bidCount: 0,
+            };
+          } else {
+            // Round 1 completed! Check if any unsold players exist
+            const eligibleUnsold = getEligibleRound2Players(updatedPlayers);
+            if (eligibleUnsold.length > 0) {
+              const { queue } = createRound2Queue(eligibleUnsold);
+              newState = {
+                ...state,
+                currentPlayerId: null,
+                currentHighestBid: 0,
+                currentLeadingTeamId: null,
+                timerSeconds: 0,
+                status: "PAUSED",
+                round: 2,
+                roundStage: "ROUND_2_TRANSITION",
+                round2QueueJson: JSON.stringify(queue),
+                round2InitializedAt: nowIso,
+                round1Completed: true,
+                bidCount: 0,
+              };
+            } else {
+              // All players sold!
+              newState = {
+                ...state,
+                currentPlayerId: null,
+                currentHighestBid: 0,
+                currentLeadingTeamId: null,
+                timerSeconds: 0,
+                status: "FINISHED",
+                round: 1,
+                roundStage: "MAIN",
+                round1Completed: true,
+                bidCount: 0,
+              };
+            }
+          }
+        }
 
         const newPurchase: PurchaseRecord = {
           id: `purchase-${soldPlayer.id}`,
@@ -583,19 +846,110 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
           p.id === unsoldPlayer.id ? { ...p, status: "UNSOLD" as const } : p
         );
 
-        const nextPlayer = updatedPlayers.find((p) => p.status === "AVAILABLE");
         const initialDuration = rules.initialTimerSeconds || 45;
+        let newState: AuctionStateRow;
 
-        const newState: AuctionStateRow = {
-          ...state,
-          currentPlayerId: nextPlayer ? nextPlayer.id : null,
-          currentHighestBid: 0,
-          currentLeadingTeamId: null,
-          timerSeconds: initialDuration,
-          timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
-          status: nextPlayer ? "IN_PROGRESS" : "FINISHED",
-          bidCount: 0,
-        };
+        if (state.round === 2) {
+          // --- ROUND 2 LOT UNSOLD ---
+          let queue: Round2QueueItem[] = [];
+          try {
+            if (state.round2QueueJson) queue = JSON.parse(state.round2QueueJson);
+          } catch {}
+
+          // Mark current player as UNSOLD in Round 2 queue
+          // A player remaining unsold in Round 2 must remain marked UNSOLD and must not be added to another round
+          const updatedQueue = queue.map((item) =>
+            item.id === unsoldPlayer.id ? { ...item, status: "UNSOLD" as const } : item
+          );
+
+          const nextPending = updatedQueue.find((item) => item.status === "PENDING");
+          const nextPlayer = nextPending ? updatedPlayers.find((p) => p.id === nextPending.id) : null;
+
+          if (nextPlayer) {
+            updatedPlayers.forEach((p) => {
+              if (p.id === nextPlayer.id) p.status = "ON_AUCTION";
+            });
+
+            newState = {
+              ...state,
+              currentPlayerId: nextPlayer.id,
+              currentHighestBid: 0,
+              currentLeadingTeamId: null,
+              timerSeconds: initialDuration,
+              timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
+              status: "IN_PROGRESS",
+              round: 2,
+              roundStage: "ROUND_2",
+              round2QueueJson: JSON.stringify(updatedQueue),
+              bidCount: 0,
+            };
+          } else {
+            // Round 2 complete! No Round 3.
+            newState = {
+              ...state,
+              currentPlayerId: null,
+              currentHighestBid: 0,
+              currentLeadingTeamId: null,
+              timerSeconds: 0,
+              status: "FINISHED",
+              round: 2,
+              roundStage: "ROUND_2",
+              round2QueueJson: JSON.stringify(updatedQueue),
+              bidCount: 0,
+            };
+          }
+        } else {
+          // --- ROUND 1 LOT UNSOLD ---
+          const nextPlayer = updatedPlayers.find((p) => p.status === "AVAILABLE");
+
+          if (nextPlayer) {
+            newState = {
+              ...state,
+              currentPlayerId: nextPlayer.id,
+              currentHighestBid: 0,
+              currentLeadingTeamId: null,
+              timerSeconds: initialDuration,
+              timerExpiresAt: new Date(Date.now() + initialDuration * 1000).toISOString(),
+              status: "IN_PROGRESS",
+              round: 1,
+              roundStage: "MAIN",
+              bidCount: 0,
+            };
+          } else {
+            // Round 1 completed! Check if any unsold players exist
+            const eligibleUnsold = getEligibleRound2Players(updatedPlayers);
+            if (eligibleUnsold.length > 0) {
+              const { queue } = createRound2Queue(eligibleUnsold);
+              newState = {
+                ...state,
+                currentPlayerId: null,
+                currentHighestBid: 0,
+                currentLeadingTeamId: null,
+                timerSeconds: 0,
+                status: "PAUSED",
+                round: 2,
+                roundStage: "ROUND_2_TRANSITION",
+                round2QueueJson: JSON.stringify(queue),
+                round2InitializedAt: nowIso,
+                round1Completed: true,
+                bidCount: 0,
+              };
+            } else {
+              newState = {
+                ...state,
+                currentPlayerId: null,
+                currentHighestBid: 0,
+                currentLeadingTeamId: null,
+                timerSeconds: 0,
+                status: "FINISHED",
+                round: 1,
+                roundStage: "MAIN",
+                round1Completed: true,
+                bidCount: 0,
+              };
+            }
+          }
+        }
 
         const auditEntry: AuditLogEntry = {
           id: `audit-${Date.now()}`,

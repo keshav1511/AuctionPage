@@ -12,6 +12,11 @@ import { useLeague } from "@/lib/context/league-context";
 import { useRealtimeAuction } from "@/lib/hooks/use-realtime-auction";
 import { calculateNextBid } from "@/lib/auction/slab-calculator";
 import { analyzeTeamBiddingEligibility, TeamPurseReserveAnalysis } from "@/lib/auction/purse-validator";
+import {
+  calculateRoundStatistics,
+  detectRound1Completion,
+  getEligibleRound2Players,
+} from "@/lib/auction/round-manager";
 import { Team, Player } from "@/types";
 import {
   Gavel,
@@ -23,6 +28,9 @@ import {
   ChevronRight,
   User,
   Radio,
+  Sparkles,
+  Users,
+  RefreshCw,
 } from "lucide-react";
 
 export default function AuctionControlDesk() {
@@ -41,6 +49,8 @@ export default function AuctionControlDesk() {
     markUnsold,
     togglePause,
     undo,
+    initRound2,
+    startRound2,
   } = useRealtimeAuction(activeLeague.id);
 
   const [activePlayerIndex, setActivePlayerIndex] = useState(0);
@@ -165,18 +175,62 @@ export default function AuctionControlDesk() {
     }
   }, [undo]);
 
+  // Round progression statistics
+  const roundStats = useMemo(() => {
+    return calculateRoundStatistics({
+      players: livePlayers,
+      round: session.round || 1,
+      roundStage: session.roundStage,
+      round2Queue: session.round2Queue,
+      currentPlayerId: session.currentPlayerId,
+    });
+  }, [livePlayers, session.round, session.roundStage, session.round2Queue, session.currentPlayerId]);
+
+  const isR1Complete = session.round1Completed || detectRound1Completion(livePlayers);
+  const eligibleUnsoldCount = useMemo(() => getEligibleRound2Players(livePlayers).length, [livePlayers]);
+
+  const handleInitRound2 = useCallback(async () => {
+    const res = await initRound2();
+    if (!res.success) {
+      setLocalNotice(res.error || "Failed to initialize Round 2");
+      setTimeout(() => setLocalNotice(null), 3500);
+    } else {
+      setLocalNotice("Round 2 queue initialized successfully!");
+      setTimeout(() => setLocalNotice(null), 3000);
+    }
+  }, [initRound2]);
+
+  const handleStartRound2 = useCallback(async () => {
+    const res = await startRound2();
+    if (!res.success) {
+      setLocalNotice(res.error || "Failed to start Round 2");
+      setTimeout(() => setLocalNotice(null), 3500);
+    } else {
+      setLocalNotice("Round 2 live auction has commenced!");
+      setTimeout(() => setLocalNotice(null), 3000);
+    }
+  }, [startRound2]);
+
   /**
    * Advances to next lot
    */
   const handleNextPlayer = async () => {
-    if (activePlayerIndex < livePlayers.length - 1) {
-      const nextIdx = activePlayerIndex + 1;
-      const nextP = livePlayers[nextIdx];
-      setActivePlayerIndex(nextIdx);
-      await selectLot(nextP.id);
+    if (session.round === 2) {
+      const res = await selectLot();
+      if (!res.success) {
+        setLocalNotice(res.error || "End of Round 2 queue reached!");
+        setTimeout(() => setLocalNotice(null), 3000);
+      }
     } else {
-      setLocalNotice("End of player roster reached!");
-      setTimeout(() => setLocalNotice(null), 3000);
+      if (activePlayerIndex < livePlayers.length - 1) {
+        const nextIdx = activePlayerIndex + 1;
+        const nextP = livePlayers[nextIdx];
+        setActivePlayerIndex(nextIdx);
+        await selectLot(nextP.id);
+      } else {
+        setLocalNotice("End of player roster reached!");
+        setTimeout(() => setLocalNotice(null), 3000);
+      }
     }
   };
 
@@ -216,7 +270,7 @@ export default function AuctionControlDesk() {
       <div className="flex-1 flex flex-col min-w-0">
         <AdminHeader
           title="Live Auction Control Desk"
-          subtitle={`${activeLeague.name} • Lot ${activePlayerIndex + 1} of ${livePlayers.length}`}
+          subtitle={`${activeLeague.name} • ${roundStats.roundLabel}`}
           action={
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold bg-white border-slate-200">
@@ -254,6 +308,184 @@ export default function AuctionControlDesk() {
             </div>
           )}
 
+          {/* Section: Authoritative Round Indicator & Statistics Bar */}
+          <Card className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
+            <CardContent className="p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`px-3 py-1.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center gap-2 border ${
+                    session.round === 2
+                      ? "bg-amber-50 border-amber-300 text-amber-800"
+                      : "bg-emerald-50 border-emerald-300 text-emerald-800"
+                  }`}
+                >
+                  <Sparkles className={`w-4 h-4 ${session.round === 2 ? "text-amber-600" : "text-emerald-600"}`} />
+                  <span>{roundStats.roundLabel}</span>
+                </div>
+
+                {session.roundStage === "ROUND_2_TRANSITION" && (
+                  <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-300 text-[10px] animate-pulse">
+                    TRANSITION SCREEN ACTIVE ON /LIVE
+                  </Badge>
+                )}
+              </div>
+
+              {/* Round Statistics Pills */}
+              <div className="flex flex-wrap items-center gap-2 sm:gap-4 text-xs font-mono">
+                <div className="px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-200 flex items-center gap-1.5">
+                  <span className="text-slate-500 font-sans text-[11px]">Total in Round:</span>
+                  <span className="font-bold text-slate-900">{roundStats.totalInRound}</span>
+                </div>
+
+                <div className="px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-center gap-1.5">
+                  <span className="text-emerald-600 font-sans text-[11px]">Sold:</span>
+                  <span className="font-bold">{roundStats.soldCount}</span>
+                </div>
+
+                <div className="px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-700 flex items-center gap-1.5">
+                  <span className="text-slate-500 font-sans text-[11px]">Unsold:</span>
+                  <span className="font-bold">{roundStats.unsoldCount}</span>
+                </div>
+
+                <div className="px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 flex items-center gap-1.5">
+                  <span className="text-blue-600 font-sans text-[11px]">Pending:</span>
+                  <span className="font-bold">{roundStats.pendingCount}</span>
+                </div>
+
+                {/* Round 2 Quick Trigger if R1 complete and not yet in R2 */}
+                {isR1Complete && session.round !== 2 && eligibleUnsoldCount > 0 && (
+                  <Button
+                    onClick={handleInitRound2}
+                    size="sm"
+                    className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs gap-1.5 shadow-sm"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Initialize Round 2 ({eligibleUnsoldCount} Unsold)
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Section: Round 2 Transition & Confirmation Banner (when in transition) */}
+          {session.roundStage === "ROUND_2_TRANSITION" && (
+            <Card className="bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border-2 border-amber-400/80 shadow-md rounded-2xl overflow-hidden">
+              <CardContent className="p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded font-black text-[10px] bg-amber-500 text-white uppercase tracking-wider">
+                      STAGE TRANSITION
+                    </span>
+                    <h3 className="font-bold text-base text-slate-900">
+                      ROUND 2 – UNSOLD PLAYERS READY
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-600">
+                    Round 1 main sequence is complete. {roundStats.totalInRound} unsold players have been
+                    randomized once and queued. Spectators currently see the Round 2 introduction screen.
+                  </p>
+                </div>
+
+                <Button
+                  onClick={handleStartRound2}
+                  size="lg"
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-bold gap-2 shrink-0 shadow-md active:scale-95 transition"
+                >
+                  <Sparkles className="w-5 h-5" />
+                  START ROUND 2 AUCTION (ENTER LOT 1)
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Section: Round 2 Player Queue Drawer (when in Round 2) */}
+          {(session.round === 2 || session.roundStage === "ROUND_2_TRANSITION") && session.round2Queue && (
+            <Card className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
+              <CardContent className="p-5 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-amber-600" />
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                      Round 2 Queue ({session.round2Queue.length} Players)
+                    </h3>
+                  </div>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    Order locked & persisted
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5 max-h-64 overflow-y-auto pr-1">
+                  {session.round2Queue.map((item, idx) => {
+                    const p = livePlayers.find((player) => player.id === item.id);
+                    if (!p) return null;
+                    const isCurrent = session.currentPlayerId === p.id && session.status === "IN_PROGRESS";
+
+                    return (
+                      <div
+                        key={p.id}
+                        className={`p-2.5 rounded-xl border text-left transition flex flex-col justify-between ${
+                          isCurrent
+                            ? "border-amber-500 bg-amber-50/70 shadow-sm ring-1 ring-amber-500"
+                            : item.status === "SOLD"
+                            ? "border-slate-200 bg-slate-50/60 opacity-60"
+                            : item.status === "UNSOLD"
+                            ? "border-slate-200 bg-slate-50/60 opacity-60"
+                            : "border-slate-200 bg-white hover:border-slate-300"
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="font-mono text-[10px] text-slate-400">#{idx + 1}</span>
+                            {isCurrent ? (
+                              <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-600 text-white animate-pulse">
+                                ON AUCTION
+                              </span>
+                            ) : item.status === "SOLD" ? (
+                              <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-emerald-600 text-white">
+                                SOLD
+                              </span>
+                            ) : item.status === "UNSOLD" ? (
+                              <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-slate-300 text-slate-700">
+                                UNSOLD
+                              </span>
+                            ) : (
+                              <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-blue-100 text-blue-700 border border-blue-200">
+                                PENDING
+                              </span>
+                            )}
+                          </div>
+
+                          <h5 className="font-bold text-xs text-slate-900 truncate" title={p.fullName}>
+                            {p.fullName}
+                          </h5>
+                          <p className="text-[10px] text-slate-500 truncate">
+                            {formatRole(p.primaryRole)} • {p.category}
+                          </p>
+                        </div>
+
+                        <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[10px]">
+                          <span className="font-mono font-semibold text-slate-700">
+                            {formatCurrency(p.basePriceOverride || p.basePrice, true)}
+                          </span>
+
+                          {item.status === "PENDING" && !isCurrent && (
+                            <button
+                              type="button"
+                              onClick={() => selectLot(p.id)}
+                              className="text-[9px] font-bold text-amber-700 hover:text-amber-900 underline"
+                            >
+                              Spotlight
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Top Split: Active Player Card & Standing Bid / Timer */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* Active Player Card */}
@@ -280,6 +512,11 @@ export default function AuctionControlDesk() {
                       <span className="font-mono text-xs text-slate-400">
                         {currentPlayer.registrationNo}
                       </span>
+                      {session.round === 2 && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                          ROUND 2
+                        </span>
+                      )}
                     </div>
 
                     <h2 className="text-xl font-bold text-slate-900 leading-tight">

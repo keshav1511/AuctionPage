@@ -137,6 +137,11 @@ export interface Bid {
   placedAt: string;
 }
 
+export interface Round2QueueItem {
+  id: string;
+  status: "PENDING" | "SOLD" | "UNSOLD";
+}
+
 export interface AuctionSession {
   id: string;
   seasonId: string;
@@ -151,6 +156,10 @@ export interface AuctionSession {
   lastBidAt?: string;
   bidExtensionSeconds?: number;
   round: number;
+  roundStage?: 'MAIN' | 'ROUND_2_TRANSITION' | 'ROUND_2';
+  round2Queue?: Round2QueueItem[];
+  round2InitializedAt?: string;
+  round1Completed?: boolean;
   bidCount: number;
   recentBids: Bid[];
 }

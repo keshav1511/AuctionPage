@@ -28,6 +28,8 @@ export interface RealtimeAuctionState {
   togglePause: () => Promise<{ success: boolean; error?: string }>;
   undo: () => Promise<{ success: boolean; error?: string }>;
   resetLot: () => Promise<{ success: boolean; error?: string }>;
+  initRound2: () => Promise<{ success: boolean; error?: string }>;
+  startRound2: () => Promise<{ success: boolean; error?: string }>;
   syncLeagueData: (teams?: Team[], players?: Player[]) => Promise<void>;
 }
 
@@ -202,6 +204,10 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
 
   const resetLot = useCallback(() => sendAction({ type: "RESET_LOT" }), [sendAction]);
 
+  const initRound2 = useCallback(() => sendAction({ type: "INIT_ROUND_2" }), [sendAction]);
+
+  const startRound2 = useCallback(() => sendAction({ type: "START_ROUND_2" }), [sendAction]);
+
   const syncLeagueData = useCallback(
     async (updatedTeams?: Team[], updatedPlayers?: Player[]) => {
       if (updatedTeams) {
@@ -230,6 +236,8 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
     togglePause,
     undo,
     resetLot,
+    initRound2,
+    startRound2,
     syncLeagueData,
   };
 }

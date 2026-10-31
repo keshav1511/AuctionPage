@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import Image from "next/image";
 import confetti from "canvas-confetti";
 import { BroadcastHeader } from "@/components/public/broadcast-header";
@@ -21,7 +21,11 @@ import {
   Sparkles,
   Zap,
   Radio,
+  Users,
+  Coins,
+  Flame,
 } from "lucide-react";
+import { Player } from "@/types";
 
 export default function LiveAuctionStage() {
   const { activeLeague } = useLeague();
@@ -45,6 +49,152 @@ export default function LiveAuctionStage() {
       });
     }
   }, [isHammered]);
+
+  const isRound2Transition =
+    session.roundStage === "ROUND_2_TRANSITION" ||
+    (session.round === 2 && !session.currentPlayerId && session.status !== "FINISHED");
+
+  const returningPlayers: Player[] = useMemo(() => {
+    if (session.round2Queue && session.round2Queue.length > 0) {
+      return session.round2Queue
+        .map((item) => livePlayers.find((p) => p.id === item.id))
+        .filter((p): p is Player => p !== undefined);
+    }
+    return livePlayers.filter((p) => p.status === "UNSOLD");
+  }, [session.round2Queue, livePlayers]);
+
+  const totalPurseRemaining = useMemo(() => {
+    return liveTeams.reduce((sum, t) => sum + (t.purse?.remainingAmount || 0), 0);
+  }, [liveTeams]);
+
+  // Dedicated ROUND 2 – UNSOLD PLAYERS Transition Screen
+  if (isRound2Transition) {
+    return (
+      <div className="min-h-screen bg-[#070A0D] text-slate-100 flex flex-col overflow-x-hidden select-none">
+        <BroadcastHeader />
+
+        <main className="flex-1 p-4 lg:p-8 flex flex-col justify-between max-w-[1920px] mx-auto w-full">
+          {/* Transition Hero Banner */}
+          <div className="text-center my-6 relative z-10 space-y-4">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 font-mono text-xs font-bold tracking-widest uppercase">
+              <Sparkles className="w-4 h-4 text-amber-400" />
+              <span>STAGE TRANSITION • SECOND CHANCE AUCTION</span>
+            </div>
+
+            <h1 className="text-4xl sm:text-6xl lg:text-7xl font-black uppercase tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-amber-300 via-yellow-100 to-amber-500 gold-glow">
+              ROUND 2 – UNSOLD PLAYERS
+            </h1>
+
+            <p className="text-slate-400 text-sm sm:text-base max-w-2xl mx-auto font-medium">
+              Round 1 has concluded. {returningPlayers.length} elite cricketers return to the auction floor
+              in randomized sequence. Franchises will compete once more with remaining purse balances.
+            </p>
+
+            {/* Quick Metrics Bar */}
+            <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 pt-2">
+              <div className="px-5 py-2.5 rounded-xl bg-charcoal-900/80 border border-slate-800 flex items-center gap-3">
+                <Users className="w-5 h-5 text-amber-400" />
+                <div className="text-left">
+                  <span className="text-[10px] text-slate-400 uppercase font-semibold block">Returning Players</span>
+                  <span className="font-mono text-lg font-bold text-white">{returningPlayers.length}</span>
+                </div>
+              </div>
+
+              <div className="px-5 py-2.5 rounded-xl bg-charcoal-900/80 border border-slate-800 flex items-center gap-3">
+                <Coins className="w-5 h-5 text-emerald-400" />
+                <div className="text-left">
+                  <span className="text-[10px] text-slate-400 uppercase font-semibold block">League Purse Available</span>
+                  <span className="font-mono text-lg font-bold text-emerald-400">{formatCurrency(totalPurseRemaining, true)}</span>
+                </div>
+              </div>
+
+              <div className="px-5 py-2.5 rounded-xl bg-charcoal-900/80 border border-slate-800 flex items-center gap-3">
+                <Flame className="w-5 h-5 text-yellow-400" />
+                <div className="text-left">
+                  <span className="text-[10px] text-slate-400 uppercase font-semibold block">Stage Status</span>
+                  <span className="font-mono text-xs font-bold text-amber-300 uppercase">Queue Locked & Ready</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Returning Players Gallery Grid */}
+          <div className="my-6">
+            <div className="flex items-center justify-between mb-4 border-b border-slate-800/80 pb-2">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                <Users className="w-4 h-4 text-amber-400" /> Returning Player Pool ({returningPlayers.length})
+              </h3>
+              <span className="text-xs text-slate-500 font-mono">
+                Order: Authoritatively randomized once
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+              {returningPlayers.map((p, idx) => (
+                <div
+                  key={p.id}
+                  className="bg-charcoal-900/90 rounded-2xl border border-slate-800 hover:border-amber-500/50 p-3.5 flex flex-col justify-between shadow-lg backdrop-blur-md transition-all hover:scale-[1.02]"
+                >
+                  <div>
+                    {/* Photo with 3:4 aspect ratio */}
+                    <div className="relative w-full aspect-[3/4] rounded-xl overflow-hidden bg-slate-900 border border-slate-700/60 mb-2.5">
+                      <Image
+                        src={p.photoUrl}
+                        alt={p.fullName}
+                        fill
+                        className="object-cover"
+                      />
+                      <div className="absolute top-2 left-2">
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-black/70 text-amber-300 border border-amber-500/30">
+                          #{idx + 1}
+                        </span>
+                      </div>
+                      <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent py-1.5 px-2">
+                        <span className="text-[9px] font-black tracking-wider text-amber-300 uppercase truncate block">
+                          ROUND 2
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${getCategoryBadgeColor(p.category)}`}>
+                        {p.category}
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-medium truncate">
+                        {formatRole(p.primaryRole)}
+                      </span>
+                    </div>
+
+                    <h4 className="font-bold text-xs text-white truncate" title={p.fullName}>
+                      {p.fullName}
+                    </h4>
+                  </div>
+
+                  <div className="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between text-[11px]">
+                    <span className="text-[10px] text-slate-500 uppercase">Base:</span>
+                    <span className="font-mono font-bold text-amber-300">
+                      {formatCurrency(p.basePriceOverride || p.basePrice, true)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Bottom Live Broadcast Ticker */}
+          <div className="p-3.5 rounded-xl bg-charcoal-900/80 border border-slate-800 flex items-center justify-between text-xs text-slate-400">
+            <div className="flex items-center gap-2">
+              <Radio className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+              <span>Broadcast Live • Awaiting Auctioneer to call first Round 2 lot</span>
+            </div>
+            <span className="font-mono text-slate-500 text-[11px]">
+              {activeLeague.name} Official Auction Stage
+            </span>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   const player = session.currentPlayer || livePlayers[0] || MOCK_PLAYERS[0];
   const leadingTeam = session.currentLeadingTeam || liveTeams[0];
@@ -71,7 +221,13 @@ export default function LiveAuctionStage() {
                   {player.registrationNo}
                 </span>
                 <span className="text-xs uppercase font-bold text-slate-400 tracking-wider">
-                  Lot #1 • Round {session.round}
+                  {session.round === 2 ? (
+                    <span className="text-amber-400 font-extrabold flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400" /> ROUND 2 – UNSOLD PLAYERS
+                    </span>
+                  ) : (
+                    `Lot #${player.sortOrder || 1} • Round 1`
+                  )}
                 </span>
               </div>
               <div className="flex items-center gap-2">

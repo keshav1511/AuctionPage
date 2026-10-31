@@ -328,6 +328,10 @@ export const AUCTION_STATE_HEADERS = [
   "lockToken",
   "lockExpiresAt",
   "updatedAt",
+  "roundStage",
+  "round2QueueJson",
+  "round2InitializedAt",
+  "round1Completed",
 ];
 
 export interface AuctionStateRow {
@@ -347,6 +351,10 @@ export interface AuctionStateRow {
   lockToken?: string | null;
   lockExpiresAt?: string | null;
   updatedAt?: string;
+  roundStage?: 'MAIN' | 'ROUND_2_TRANSITION' | 'ROUND_2';
+  round2QueueJson?: string;
+  round2InitializedAt?: string;
+  round1Completed?: boolean;
 }
 
 export function serializeAuctionState(state: AuctionStateRow): string[] {
@@ -367,6 +375,10 @@ export function serializeAuctionState(state: AuctionStateRow): string[] {
     state.lockToken || "",
     state.lockExpiresAt || "",
     new Date().toISOString(),
+    state.roundStage || (state.round === 2 ? "ROUND_2" : "MAIN"),
+    state.round2QueueJson || "[]",
+    state.round2InitializedAt || "",
+    state.round1Completed ? "TRUE" : "FALSE",
   ];
 }
 
@@ -390,6 +402,10 @@ export function deserializeAuctionState(row: (string | undefined)[]): AuctionSta
     lockToken: row[13] || null,
     lockExpiresAt: row[14] || null,
     updatedAt: row[15] || new Date().toISOString(),
+    roundStage: (row[16] as 'MAIN' | 'ROUND_2_TRANSITION' | 'ROUND_2') || (Number(row[9]) === 2 ? "ROUND_2" : "MAIN"),
+    round2QueueJson: row[17] || "[]",
+    round2InitializedAt: row[18] || "",
+    round1Completed: row[19] === "TRUE" || row[19] === "true",
   };
 }
 
