@@ -154,10 +154,14 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
   const sendAction = useCallback(
     async (payload: Record<string, unknown>): Promise<{ success: boolean; error?: string }> => {
       try {
+        const actionId =
+          (payload.actionId as string) ||
+          `act-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
         const res = await fetch("/api/auction/action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ leagueId, ...payload }),
+          body: JSON.stringify({ leagueId, actionId, ...payload }),
         });
         const data = await res.json();
         if (!res.ok || !data.success) {

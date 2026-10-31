@@ -44,6 +44,8 @@ export interface AuctionActionPayload {
   players?: Player[];
   rules?: Partial<AuctionRules>;
   league?: Partial<League>;
+  actionId?: string;
+  clientVersion?: number;
 }
 
 export interface AuctionRealtimeEvent {
@@ -684,7 +686,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
       default:
         return { success: false, error: `Unsupported action type: ${type}` };
     }
-  });
+  }, { actionId: payload.actionId, clientVersion: payload.clientVersion });
 
   if (!txResult.success) {
     return { success: false, error: txResult.error };

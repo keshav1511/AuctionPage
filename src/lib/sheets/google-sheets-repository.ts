@@ -24,6 +24,7 @@ import {
   serializeBid,
   deserializeBid,
   serializePurchase,
+  deserializePurchase,
   serializeAuditLog,
   AuctionStateRow,
   PurchaseRecord,
@@ -45,6 +46,115 @@ function runSerialized<T>(leagueId: string, task: () => Promise<T>): Promise<T> 
   leagueMutexChains.set(leagueId, next);
   return next;
 }
+
+// ==============================================================================
+// SHORT-LIVED IN-MEMORY CACHE & REQUEST COALESCING (1.5s TTL)
+// Dramatically reduces Google Sheets API consumption to keep well under 300 req/min
+// ==============================================================================
+
+export const CACHE_TTL_MS = 1500; // 1.5 seconds
+
+interface CacheItem<T> {
+  data: T;
+  expiresAt: number;
+}
+
+const stateCache = new Map<string, CacheItem<AuctionStateRow>>();
+const teamsCache = new Map<string, CacheItem<Team[]>>();
+const playersCache = new Map<string, CacheItem<Player[]>>();
+const configCache = new Map<string, CacheItem<{ league: League; rules: AuctionRules }>>();
+const recentBidsCache = new Map<string, CacheItem<Bid[]>>();
+
+export function invalidateLeagueCache(leagueId: string): void {
+  stateCache.delete(leagueId);
+  teamsCache.delete(leagueId);
+  playersCache.delete(leagueId);
+  configCache.delete(leagueId);
+  recentBidsCache.delete(leagueId);
+}
+
+// In-flight request coalescing to prevent thundering herd on concurrent spectator requests
+const inFlightRequests = new Map<string, Promise<unknown>>();
+
+function coalesceRequest<T>(key: string, fetchFn: () => Promise<T>): Promise<T> {
+  if (inFlightRequests.has(key)) {
+    return inFlightRequests.get(key) as Promise<T>;
+  }
+  const promise = fetchFn().finally(() => {
+    inFlightRequests.delete(key);
+  });
+  inFlightRequests.set(key, promise);
+  return promise;
+}
+
+// Exponential backoff retry with randomized jitter for transient Google API rate limits & 5xx errors
+export async function withGoogleRetry<T>(
+  fn: () => Promise<T>,
+  options: { maxRetries?: number; initialDelayMs?: number; operationName?: string } = {}
+): Promise<T> {
+  const maxRetries = options.maxRetries ?? 3;
+  let delay = options.initialDelayMs ?? 200;
+  const operationName = options.operationName ?? "GoogleSheetsOperation";
+
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      const errorObj = err as {
+        status?: number;
+        response?: { status?: number };
+        code?: string | number;
+        message?: string;
+      };
+      const status = errorObj?.status || errorObj?.response?.status || errorObj?.code;
+      const isRateLimit =
+        status === 429 || (errorObj?.message && errorObj.message.includes("Quota exceeded"));
+      const isServerError = typeof status === "number" && status >= 500 && status < 600;
+      const isNetworkError = errorObj?.code === "ECONNRESET" || errorObj?.code === "ETIMEDOUT";
+
+      if ((isRateLimit || isServerError || isNetworkError) && attempt <= maxRetries) {
+        const jitter = Math.random() * 80 - 40;
+        const sleepTime = Math.max(50, Math.floor(delay + jitter));
+        console.warn(
+          `[GoogleRetry] ${operationName} failed (status=${status}). Retrying attempt ${attempt}/${maxRetries} after ${sleepTime}ms...`
+        );
+        await new Promise((res) => setTimeout(res, sleepTime));
+        delay *= 2;
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error(`${operationName} failed after ${maxRetries} retries`);
+}
+
+// Idempotency cache for duplicate request suppression
+const idempotencyStore = new Map<string, { result: AuctionActionTransactionResult; timestamp: number }>();
+const IDEMPOTENCY_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function getCachedIdempotentResult(actionId?: string): AuctionActionTransactionResult | null {
+  if (!actionId) return null;
+  const entry = idempotencyStore.get(actionId);
+  if (entry && Date.now() - entry.timestamp < IDEMPOTENCY_TTL_MS) {
+    return entry.result;
+  }
+  return null;
+}
+
+function storeIdempotentResult(
+  actionId: string | undefined,
+  result: AuctionActionTransactionResult
+): void {
+  if (!actionId) return;
+  if (idempotencyStore.size > 2000) {
+    const now = Date.now();
+    for (const [k, v] of idempotencyStore.entries()) {
+      if (now - v.timestamp > IDEMPOTENCY_TTL_MS) idempotencyStore.delete(k);
+    }
+  }
+  idempotencyStore.set(actionId, { result, timestamp: Date.now() });
+}
+
 
 // In-memory fallback mirror when Google credentials are not yet populated
 interface InMemoryLeagueMirror {
@@ -129,45 +239,66 @@ export function resolveSpreadsheetIdForLeague(leagueId: string): string | null {
 /**
  * Loads the complete league configuration and rules from Google Sheets
  */
-export async function getLeagueConfigFromSheets(leagueId: string): Promise<{ league: League; rules: AuctionRules }> {
-  const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
-  const sheets = getGoogleSheetsClient();
-
-  if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
-    const mirror = getOrCreateMemoryMirror(leagueId);
-    return { league: mirror.league, rules: mirror.rules };
+export async function getLeagueConfigFromSheets(
+  leagueId: string,
+  skipCache = false
+): Promise<{ league: League; rules: AuctionRules }> {
+  const now = Date.now();
+  if (!skipCache) {
+    const cached = configCache.get(leagueId);
+    if (cached && cached.expiresAt > now) {
+      return cached.data;
+    }
   }
 
-  try {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${TAB_LEAGUE_CONFIG}!A2:Q2`,
-    });
+  return coalesceRequest(`config:${leagueId}`, async () => {
+    const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
+    const sheets = getGoogleSheetsClient();
 
-    const rows = res.data.values;
-    if (rows && rows[0]) {
-      const parsed = deserializeLeagueConfig(rows[0]);
-      if (parsed) {
-        return {
-          league: parsed.league,
-          rules: parsed.rules || { ...MOCK_RULES, seasonId: leagueId },
-        };
-      }
+    if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
+      const mirror = getOrCreateMemoryMirror(leagueId);
+      return { league: mirror.league, rules: mirror.rules };
     }
 
-    // Tab was empty; initialize and seed
-    await initializeLeagueWorkbook(spreadsheetId, {
-      league: getInitialLeagueById(leagueId),
-      rules: { ...MOCK_RULES, seasonId: leagueId },
-    });
+    try {
+      const res = await withGoogleRetry(
+        () =>
+          sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${TAB_LEAGUE_CONFIG}!A2:Q2`,
+          }),
+        { operationName: "GetLeagueConfig" }
+      );
 
-    const mirror = getOrCreateMemoryMirror(leagueId);
-    return { league: mirror.league, rules: mirror.rules };
-  } catch (error) {
-    console.error(`[SheetsRepository] Error getting league config for ${leagueId}:`, error);
-    const mirror = getOrCreateMemoryMirror(leagueId);
-    return { league: mirror.league, rules: mirror.rules };
-  }
+      const rows = res.data.values;
+      if (rows && rows[0]) {
+        const parsed = deserializeLeagueConfig(rows[0]);
+        if (parsed) {
+          const result = {
+            league: parsed.league,
+            rules: parsed.rules || { ...MOCK_RULES, seasonId: leagueId },
+          };
+          configCache.set(leagueId, { data: result, expiresAt: Date.now() + CACHE_TTL_MS });
+          return result;
+        }
+      }
+
+      // Tab was empty; initialize and seed
+      await initializeLeagueWorkbook(spreadsheetId, {
+        league: getInitialLeagueById(leagueId),
+        rules: { ...MOCK_RULES, seasonId: leagueId },
+      });
+
+      const mirror = getOrCreateMemoryMirror(leagueId);
+      const fallback = { league: mirror.league, rules: mirror.rules };
+      configCache.set(leagueId, { data: fallback, expiresAt: Date.now() + CACHE_TTL_MS });
+      return fallback;
+    } catch (error) {
+      console.error(`[SheetsRepository] Error getting league config for ${leagueId}:`, error);
+      const mirror = getOrCreateMemoryMirror(leagueId);
+      return { league: mirror.league, rules: mirror.rules };
+    }
+  });
 }
 
 /**
@@ -181,6 +312,7 @@ export async function saveLeagueConfigToSheets(league: League, rules?: AuctionRu
   const mirror = getOrCreateMemoryMirror(league.id);
   mirror.league = { ...mirror.league, ...league };
   if (rules) mirror.rules = { ...mirror.rules, ...rules };
+  invalidateLeagueCache(league.id);
 
   if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
     return;
@@ -188,12 +320,16 @@ export async function saveLeagueConfigToSheets(league: League, rules?: AuctionRu
 
   try {
     const values = [serializeLeagueConfig(mirror.league, mirror.rules)];
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${TAB_LEAGUE_CONFIG}!A2:Q2`,
-      valueInputOption: "RAW",
-      requestBody: { values },
-    });
+    await withGoogleRetry(
+      () =>
+        sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${TAB_LEAGUE_CONFIG}!A2:Q2`,
+          valueInputOption: "RAW",
+          requestBody: { values },
+        }),
+      { operationName: "SaveLeagueConfig" }
+    );
   } catch (error) {
     console.error(`[SheetsRepository] Failed to save league config for ${league.id}:`, error);
     throw error;
@@ -203,39 +339,55 @@ export async function saveLeagueConfigToSheets(league: League, rules?: AuctionRu
 /**
  * Retrieves all teams from Google Sheets
  */
-export async function getTeamsFromSheets(leagueId: string): Promise<Team[]> {
-  const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
-  const sheets = getGoogleSheetsClient();
-
-  if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
-    const mirror = getOrCreateMemoryMirror(leagueId);
-    return mirror.teams;
+export async function getTeamsFromSheets(leagueId: string, skipCache = false): Promise<Team[]> {
+  const now = Date.now();
+  if (!skipCache) {
+    const cached = teamsCache.get(leagueId);
+    if (cached && cached.expiresAt > now) {
+      return cached.data;
+    }
   }
 
-  try {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${TAB_TEAMS}!A2:T`,
-    });
+  return coalesceRequest(`teams:${leagueId}`, async () => {
+    const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
+    const sheets = getGoogleSheetsClient();
 
-    const rows = res.data.values || [];
-    if (rows.length === 0) {
-      // Seed initial teams if blank
+    if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
       const mirror = getOrCreateMemoryMirror(leagueId);
-      await saveTeamsToSheets(leagueId, mirror.teams);
       return mirror.teams;
     }
 
-    const teams: Team[] = [];
-    for (const row of rows) {
-      const team = deserializeTeam(row);
-      if (team) teams.push(team);
+    try {
+      const res = await withGoogleRetry(
+        () =>
+          sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${TAB_TEAMS}!A2:T`,
+          }),
+        { operationName: "GetTeams" }
+      );
+
+      const rows = res.data.values || [];
+      if (rows.length === 0) {
+        // Seed initial teams if blank
+        const mirror = getOrCreateMemoryMirror(leagueId);
+        await saveTeamsToSheets(leagueId, mirror.teams);
+        teamsCache.set(leagueId, { data: mirror.teams, expiresAt: Date.now() + CACHE_TTL_MS });
+        return mirror.teams;
+      }
+
+      const teams: Team[] = [];
+      for (const row of rows) {
+        const team = deserializeTeam(row);
+        if (team) teams.push(team);
+      }
+      teamsCache.set(leagueId, { data: teams, expiresAt: Date.now() + CACHE_TTL_MS });
+      return teams;
+    } catch (error) {
+      console.error(`[SheetsRepository] Error fetching teams for ${leagueId}:`, error);
+      return getOrCreateMemoryMirror(leagueId).teams;
     }
-    return teams;
-  } catch (error) {
-    console.error(`[SheetsRepository] Error fetching teams for ${leagueId}:`, error);
-    return getOrCreateMemoryMirror(leagueId).teams;
-  }
+  });
 }
 
 /**
@@ -248,26 +400,34 @@ export async function saveTeamsToSheets(leagueId: string, teams: Team[]): Promis
   // Update memory mirror
   const mirror = getOrCreateMemoryMirror(leagueId);
   mirror.teams = teams;
+  teamsCache.set(leagueId, { data: teams, expiresAt: Date.now() + CACHE_TTL_MS });
 
   if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
     return;
   }
 
   try {
-    // Clear existing range and write new rows
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId,
-      range: `${TAB_TEAMS}!A2:T`,
-    });
+    await withGoogleRetry(
+      () =>
+        sheets.spreadsheets.values.clear({
+          spreadsheetId,
+          range: `${TAB_TEAMS}!A2:T`,
+        }),
+      { operationName: "ClearTeams" }
+    );
 
     if (teams.length > 0) {
       const values = teams.map(serializeTeam);
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `${TAB_TEAMS}!A2:T${teams.length + 1}`,
-        valueInputOption: "RAW",
-        requestBody: { values },
-      });
+      await withGoogleRetry(
+        () =>
+          sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `${TAB_TEAMS}!A2:T${teams.length + 1}`,
+            valueInputOption: "RAW",
+            requestBody: { values },
+          }),
+        { operationName: "UpdateTeams" }
+      );
     }
   } catch (error) {
     console.error(`[SheetsRepository] Failed to save teams for ${leagueId}:`, error);
@@ -278,39 +438,55 @@ export async function saveTeamsToSheets(leagueId: string, teams: Team[]): Promis
 /**
  * Retrieves all players from Google Sheets
  */
-export async function getPlayersFromSheets(leagueId: string): Promise<Player[]> {
-  const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
-  const sheets = getGoogleSheetsClient();
-
-  if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
-    const mirror = getOrCreateMemoryMirror(leagueId);
-    return mirror.players;
+export async function getPlayersFromSheets(leagueId: string, skipCache = false): Promise<Player[]> {
+  const now = Date.now();
+  if (!skipCache) {
+    const cached = playersCache.get(leagueId);
+    if (cached && cached.expiresAt > now) {
+      return cached.data;
+    }
   }
 
-  try {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${TAB_PLAYERS}!A2:V`,
-    });
+  return coalesceRequest(`players:${leagueId}`, async () => {
+    const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
+    const sheets = getGoogleSheetsClient();
 
-    const rows = res.data.values || [];
-    if (rows.length === 0) {
-      // Seed initial players if blank
+    if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
       const mirror = getOrCreateMemoryMirror(leagueId);
-      await savePlayersToSheets(leagueId, mirror.players);
       return mirror.players;
     }
 
-    const players: Player[] = [];
-    for (const row of rows) {
-      const player = deserializePlayer(row);
-      if (player) players.push(player);
+    try {
+      const res = await withGoogleRetry(
+        () =>
+          sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${TAB_PLAYERS}!A2:V`,
+          }),
+        { operationName: "GetPlayers" }
+      );
+
+      const rows = res.data.values || [];
+      if (rows.length === 0) {
+        // Seed initial players if blank
+        const mirror = getOrCreateMemoryMirror(leagueId);
+        await savePlayersToSheets(leagueId, mirror.players);
+        playersCache.set(leagueId, { data: mirror.players, expiresAt: Date.now() + CACHE_TTL_MS });
+        return mirror.players;
+      }
+
+      const players: Player[] = [];
+      for (const row of rows) {
+        const player = deserializePlayer(row);
+        if (player) players.push(player);
+      }
+      playersCache.set(leagueId, { data: players, expiresAt: Date.now() + CACHE_TTL_MS });
+      return players;
+    } catch (error) {
+      console.error(`[SheetsRepository] Error fetching players for ${leagueId}:`, error);
+      return getOrCreateMemoryMirror(leagueId).players;
     }
-    return players;
-  } catch (error) {
-    console.error(`[SheetsRepository] Error fetching players for ${leagueId}:`, error);
-    return getOrCreateMemoryMirror(leagueId).players;
-  }
+  });
 }
 
 /**
@@ -323,25 +499,34 @@ export async function savePlayersToSheets(leagueId: string, players: Player[]): 
   // Update memory mirror
   const mirror = getOrCreateMemoryMirror(leagueId);
   mirror.players = players;
+  playersCache.set(leagueId, { data: players, expiresAt: Date.now() + CACHE_TTL_MS });
 
   if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
     return;
   }
 
   try {
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId,
-      range: `${TAB_PLAYERS}!A2:V`,
-    });
+    await withGoogleRetry(
+      () =>
+        sheets.spreadsheets.values.clear({
+          spreadsheetId,
+          range: `${TAB_PLAYERS}!A2:V`,
+        }),
+      { operationName: "ClearPlayers" }
+    );
 
     if (players.length > 0) {
       const values = players.map(serializePlayer);
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `${TAB_PLAYERS}!A2:V${players.length + 1}`,
-        valueInputOption: "RAW",
-        requestBody: { values },
-      });
+      await withGoogleRetry(
+        () =>
+          sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `${TAB_PLAYERS}!A2:V${players.length + 1}`,
+            valueInputOption: "RAW",
+            requestBody: { values },
+          }),
+        { operationName: "UpdatePlayers" }
+      );
     }
   } catch (error) {
     console.error(`[SheetsRepository] Failed to save players for ${leagueId}:`, error);
@@ -352,37 +537,56 @@ export async function savePlayersToSheets(leagueId: string, players: Player[]): 
 /**
  * Reads current authoritative auction state from Google Sheets
  */
-export async function getAuctionStateFromSheets(leagueId: string): Promise<AuctionStateRow> {
-  const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
-  const sheets = getGoogleSheetsClient();
-
-  if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
-    const mirror = getOrCreateMemoryMirror(leagueId);
-    return mirror.state;
+export async function getAuctionStateFromSheets(
+  leagueId: string,
+  skipCache = false
+): Promise<AuctionStateRow> {
+  const now = Date.now();
+  if (!skipCache) {
+    const cached = stateCache.get(leagueId);
+    if (cached && cached.expiresAt > now) {
+      return cached.data;
+    }
   }
 
-  try {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${TAB_AUCTION_STATE}!A2:P2`,
-    });
+  return coalesceRequest(`state:${leagueId}`, async () => {
+    const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
+    const sheets = getGoogleSheetsClient();
 
-    const rows = res.data.values;
-    if (rows && rows[0]) {
-      const state = deserializeAuctionState(rows[0]);
-      if (state) {
-        return state;
-      }
+    if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
+      const mirror = getOrCreateMemoryMirror(leagueId);
+      return mirror.state;
     }
 
-    // Tab empty, initialize
-    const mirror = getOrCreateMemoryMirror(leagueId);
-    await saveAuctionStateToSheets(leagueId, mirror.state);
-    return mirror.state;
-  } catch (error) {
-    console.error(`[SheetsRepository] Error fetching auction state for ${leagueId}:`, error);
-    return getOrCreateMemoryMirror(leagueId).state;
-  }
+    try {
+      const res = await withGoogleRetry(
+        () =>
+          sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${TAB_AUCTION_STATE}!A2:P2`,
+          }),
+        { operationName: "GetAuctionState" }
+      );
+
+      const rows = res.data.values;
+      if (rows && rows[0]) {
+        const state = deserializeAuctionState(rows[0]);
+        if (state) {
+          stateCache.set(leagueId, { data: state, expiresAt: Date.now() + CACHE_TTL_MS });
+          return state;
+        }
+      }
+
+      // Tab empty, initialize
+      const mirror = getOrCreateMemoryMirror(leagueId);
+      await saveAuctionStateToSheets(leagueId, mirror.state);
+      stateCache.set(leagueId, { data: mirror.state, expiresAt: Date.now() + CACHE_TTL_MS });
+      return mirror.state;
+    } catch (error) {
+      console.error(`[SheetsRepository] Error fetching auction state for ${leagueId}:`, error);
+      return getOrCreateMemoryMirror(leagueId).state;
+    }
+  });
 }
 
 /**
@@ -395,6 +599,7 @@ export async function saveAuctionStateToSheets(leagueId: string, state: AuctionS
   // Update memory mirror
   const mirror = getOrCreateMemoryMirror(leagueId);
   mirror.state = state;
+  stateCache.set(leagueId, { data: state, expiresAt: Date.now() + CACHE_TTL_MS });
 
   if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
     return;
@@ -402,12 +607,16 @@ export async function saveAuctionStateToSheets(leagueId: string, state: AuctionS
 
   try {
     const values = [serializeAuctionState(state)];
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${TAB_AUCTION_STATE}!A2:P2`,
-      valueInputOption: "RAW",
-      requestBody: { values },
-    });
+    await withGoogleRetry(
+      () =>
+        sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${TAB_AUCTION_STATE}!A2:P2`,
+          valueInputOption: "RAW",
+          requestBody: { values },
+        }),
+      { operationName: "SaveAuctionState" }
+    );
   } catch (error) {
     console.error(`[SheetsRepository] Failed to save auction state for ${leagueId}:`, error);
     throw error;
@@ -417,37 +626,56 @@ export async function saveAuctionStateToSheets(leagueId: string, state: AuctionS
 /**
  * Reads recent bids from Google Sheets
  */
-export async function getRecentBidsFromSheets(leagueId: string, limit: number = 20): Promise<Bid[]> {
-  const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
-  const sheets = getGoogleSheetsClient();
-
-  if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
-    const mirror = getOrCreateMemoryMirror(leagueId);
-    return mirror.bids.slice(0, limit);
+export async function getRecentBidsFromSheets(
+  leagueId: string,
+  limit: number = 20,
+  skipCache = false
+): Promise<Bid[]> {
+  const now = Date.now();
+  if (!skipCache) {
+    const cached = recentBidsCache.get(leagueId);
+    if (cached && cached.expiresAt > now) {
+      return cached.data.slice(0, limit);
+    }
   }
 
-  try {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${TAB_BID_HISTORY}!A2:K`,
-    });
+  return coalesceRequest(`bids:${leagueId}`, async () => {
+    const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
+    const sheets = getGoogleSheetsClient();
 
-    const rows = res.data.values || [];
-    const bids: Bid[] = [];
-
-    // Rows stored chronologically; read from end for recents
-    for (let i = rows.length - 1; i >= 0 && bids.length < limit; i--) {
-      const row = rows[i];
-      if (row[10] === "TRUE") continue; // Exclude undone bids
-      const bid = deserializeBid(row);
-      if (bid) bids.push(bid);
+    if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
+      const mirror = getOrCreateMemoryMirror(leagueId);
+      return mirror.bids.slice(0, limit);
     }
 
-    return bids;
-  } catch (error) {
-    console.error(`[SheetsRepository] Error fetching bids for ${leagueId}:`, error);
-    return getOrCreateMemoryMirror(leagueId).bids.slice(0, limit);
-  }
+    try {
+      const res = await withGoogleRetry(
+        () =>
+          sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${TAB_BID_HISTORY}!A2:K`,
+          }),
+        { operationName: "GetRecentBids" }
+      );
+
+      const rows = res.data.values || [];
+      const bids: Bid[] = [];
+
+      // Rows stored chronologically; read from end for recents
+      for (let i = rows.length - 1; i >= 0 && bids.length < 50; i--) {
+        const row = rows[i];
+        if (row[10] === "TRUE") continue; // Exclude undone bids
+        const bid = deserializeBid(row);
+        if (bid) bids.push(bid);
+      }
+
+      recentBidsCache.set(leagueId, { data: bids, expiresAt: Date.now() + CACHE_TTL_MS });
+      return bids.slice(0, limit);
+    } catch (error) {
+      console.error(`[SheetsRepository] Error fetching bids for ${leagueId}:`, error);
+      return getOrCreateMemoryMirror(leagueId).bids.slice(0, limit);
+    }
+  });
 }
 
 /**
@@ -460,6 +688,7 @@ export async function appendBidToSheets(leagueId: string, bid: Bid): Promise<voi
   // Update memory mirror
   const mirror = getOrCreateMemoryMirror(leagueId);
   mirror.bids = [bid, ...mirror.bids];
+  recentBidsCache.delete(leagueId);
 
   if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
     return;
@@ -467,13 +696,17 @@ export async function appendBidToSheets(leagueId: string, bid: Bid): Promise<voi
 
   try {
     const values = [serializeBid(bid, leagueId)];
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: `${TAB_BID_HISTORY}!A1`,
-      valueInputOption: "RAW",
-      insertDataOption: "INSERT_ROWS",
-      requestBody: { values },
-    });
+    await withGoogleRetry(
+      () =>
+        sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: `${TAB_BID_HISTORY}!A1`,
+          valueInputOption: "RAW",
+          insertDataOption: "INSERT_ROWS",
+          requestBody: { values },
+        }),
+      { operationName: "AppendBid" }
+    );
   } catch (error) {
     console.error(`[SheetsRepository] Failed to append bid for ${leagueId}:`, error);
     throw error;
@@ -489,28 +722,37 @@ export async function markLastBidUndoneInSheets(leagueId: string): Promise<Bid |
 
   const mirror = getOrCreateMemoryMirror(leagueId);
   const undoneBid = mirror.bids.shift() || null;
+  recentBidsCache.delete(leagueId);
 
   if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
     return undoneBid;
   }
 
   try {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${TAB_BID_HISTORY}!A2:K`,
-    });
+    const res = await withGoogleRetry(
+      () =>
+        sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `${TAB_BID_HISTORY}!A2:K`,
+        }),
+      { operationName: "FindUndoneBid" }
+    );
 
     const rows = res.data.values || [];
     // Search backward for last row where isUndone !== TRUE
     for (let i = rows.length - 1; i >= 0; i--) {
       if (rows[i][10] !== "TRUE") {
         const rowIndex = i + 2; // 1-indexed, skipping header
-        await sheets.spreadsheets.values.update({
-          spreadsheetId,
-          range: `${TAB_BID_HISTORY}!K${rowIndex}`,
-          valueInputOption: "RAW",
-          requestBody: { values: [["TRUE"]] },
-        });
+        await withGoogleRetry(
+          () =>
+            sheets.spreadsheets.values.update({
+              spreadsheetId,
+              range: `${TAB_BID_HISTORY}!K${rowIndex}`,
+              valueInputOption: "RAW",
+              requestBody: { values: [["TRUE"]] },
+            }),
+          { operationName: "MarkBidUndone" }
+        );
         return deserializeBid(rows[i]);
       }
     }
@@ -518,6 +760,41 @@ export async function markLastBidUndoneInSheets(leagueId: string): Promise<Bid |
   } catch (error) {
     console.error(`[SheetsRepository] Failed to undo bid for ${leagueId}:`, error);
     return undoneBid;
+  }
+}
+
+/**
+ * Retrieves all finalized purchases from Google Sheets
+ */
+export async function getPurchasesFromSheets(leagueId: string): Promise<PurchaseRecord[]> {
+  const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
+  const sheets = getGoogleSheetsClient();
+
+  if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
+    const mirror = getOrCreateMemoryMirror(leagueId);
+    return mirror.purchases;
+  }
+
+  try {
+    const res = await withGoogleRetry(
+      () =>
+        sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `${TAB_PURCHASES}!A2:K`,
+        }),
+      { operationName: "GetPurchases" }
+    );
+
+    const rows = res.data.values || [];
+    const purchases: PurchaseRecord[] = [];
+    for (const row of rows) {
+      const p = deserializePurchase(row);
+      if (p) purchases.push(p);
+    }
+    return purchases;
+  } catch (error) {
+    console.error(`[SheetsRepository] Error fetching purchases for ${leagueId}:`, error);
+    return getOrCreateMemoryMirror(leagueId).purchases;
   }
 }
 
@@ -537,13 +814,17 @@ export async function recordPurchaseInSheets(leagueId: string, purchase: Purchas
 
   try {
     const values = [serializePurchase(purchase)];
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: `${TAB_PURCHASES}!A1`,
-      valueInputOption: "RAW",
-      insertDataOption: "INSERT_ROWS",
-      requestBody: { values },
-    });
+    await withGoogleRetry(
+      () =>
+        sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: `${TAB_PURCHASES}!A1`,
+          valueInputOption: "RAW",
+          insertDataOption: "INSERT_ROWS",
+          requestBody: { values },
+        }),
+      { operationName: "RecordPurchase" }
+    );
   } catch (error) {
     console.error(`[SheetsRepository] Failed to record purchase for ${leagueId}:`, error);
     throw error;
@@ -566,13 +847,17 @@ export async function appendAuditLogInSheets(leagueId: string, log: AuditLogEntr
 
   try {
     const values = [serializeAuditLog(log)];
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: `${TAB_AUDIT_LOG}!A1`,
-      valueInputOption: "RAW",
-      insertDataOption: "INSERT_ROWS",
-      requestBody: { values },
-    });
+    await withGoogleRetry(
+      () =>
+        sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: `${TAB_AUDIT_LOG}!A1`,
+          valueInputOption: "RAW",
+          insertDataOption: "INSERT_ROWS",
+          requestBody: { values },
+        }),
+      { operationName: "AppendAuditLog" }
+    );
   } catch (error) {
     console.error(`[SheetsRepository] Failed to append audit log for ${leagueId}:`, error);
   }
@@ -602,44 +887,76 @@ export interface AuctionActionTransactionResult {
   auditEntry?: AuditLogEntry;
 }
 
+export interface AuctionActionOptions {
+  actionId?: string;
+  clientVersion?: number;
+}
+
 /**
  * Executes an auction action inside a serialized write lock
  * Enforces the sequence:
- * 1. Acquire local process mutex
- * 2. Fetch latest authoritative state from Google Sheets
- * 3. Verify / acquire sheet lease lock
- * 4. Execute validation & action logic
- * 5. Commit atomic batch write to Google Sheets
- * 6. Release lock
+ * 1. Check idempotency cache (returns previous result on network retries)
+ * 2. Acquire local process mutex
+ * 3. Fetch latest authoritative state from Google Sheets (bypassing read cache)
+ * 4. Verify client version (optimistic concurrency check)
+ * 5. Acquire lease lock with write-and-verify confirmation loop in Sheets
+ * 6. Execute validation & action logic
+ * 7. Commit atomic batchUpdate to Google Sheets
+ * 8. Release lock, invalidate cache, store idempotency result
  */
 export async function executeSerializedAuctionAction(
   leagueId: string,
-  actionFn: (ctx: AuctionActionTransactionContext) => Promise<AuctionActionTransactionResult>
+  actionFn: (ctx: AuctionActionTransactionContext) => Promise<AuctionActionTransactionResult>,
+  options?: AuctionActionOptions
 ): Promise<AuctionActionTransactionResult> {
+  // 1. Idempotency fast-path: return cached result if actionId was already processed
+  if (options?.actionId) {
+    const cachedResult = getCachedIdempotentResult(options.actionId);
+    if (cachedResult) {
+      return cachedResult;
+    }
+  }
+
   return runSerialized(leagueId, async () => {
     const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
     const sheets = getGoogleSheetsClient();
-    const lockToken = `lock-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const lockToken = `lock-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
     const now = Date.now();
 
-    // 1. Fetch latest state from Google Sheets (or mirror)
+    // 2. Fetch latest authoritative state directly from Sheets (bypassing cache)
     const [currentState, currentTeams, currentPlayers, config, recentBids] = await Promise.all([
-      getAuctionStateFromSheets(leagueId),
-      getTeamsFromSheets(leagueId),
-      getPlayersFromSheets(leagueId),
-      getLeagueConfigFromSheets(leagueId),
-      getRecentBidsFromSheets(leagueId, 10),
+      getAuctionStateFromSheets(leagueId, true),
+      getTeamsFromSheets(leagueId, true),
+      getPlayersFromSheets(leagueId, true),
+      getLeagueConfigFromSheets(leagueId, true),
+      getRecentBidsFromSheets(leagueId, 10, true),
     ]);
 
-    // 2. Check lease lock if Google Sheets is active
+    // 3. Optimistic concurrency version check
+    if (
+      options?.clientVersion != null &&
+      options.clientVersion > 0 &&
+      currentState.version !== options.clientVersion
+    ) {
+      return {
+        success: false,
+        error: `Stale state conflict: Current auction version is ${currentState.version}, but client submitted version ${options.clientVersion}. Please refresh.`,
+      };
+    }
+
+    // 4. Check & acquire lease lock in Sheets if configured
     if (isGoogleSheetsConfigured() && sheets && spreadsheetId) {
       if (currentState.lockToken && currentState.lockExpiresAt) {
         const lockExpiryTime = new Date(currentState.lockExpiresAt).getTime();
         if (lockExpiryTime > now && currentState.lockToken !== lockToken) {
-          // Lock held by another process; retry once after 350ms
-          await new Promise((resolve) => setTimeout(resolve, 350));
-          const refreshed = await getAuctionStateFromSheets(leagueId);
-          if (refreshed.lockToken && new Date(refreshed.lockExpiresAt || 0).getTime() > Date.now()) {
+          // Lock held by another process; back off with jitter and retry once
+          const backoff = 200 + Math.floor(Math.random() * 200);
+          await new Promise((resolve) => setTimeout(resolve, backoff));
+          const refreshed = await getAuctionStateFromSheets(leagueId, true);
+          if (
+            refreshed.lockToken &&
+            new Date(refreshed.lockExpiresAt || 0).getTime() > Date.now()
+          ) {
             return {
               success: false,
               error: "Auction is currently processing another transaction. Please retry in a moment.",
@@ -648,14 +965,43 @@ export async function executeSerializedAuctionAction(
         }
       }
 
-      // Mark lease lock in Sheets
+      // Claim lease lock in Sheets
+      const lockExpiresAt = new Date(now + 5000).toISOString();
       currentState.lockToken = lockToken;
-      currentState.lockExpiresAt = new Date(now + 4000).toISOString();
-      await saveAuctionStateToSheets(leagueId, currentState);
+      currentState.lockExpiresAt = lockExpiresAt;
+
+      await withGoogleRetry(
+        () =>
+          sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `${TAB_AUCTION_STATE}!N2:O2`,
+            valueInputOption: "RAW",
+            requestBody: { values: [[lockToken, lockExpiresAt]] },
+          }),
+        { operationName: "AcquireLeaseLock" }
+      );
+
+      // Write-and-verify confirmation loop (Phase 5.1 production audit)
+      await new Promise((resolve) => setTimeout(resolve, 100 + Math.floor(Math.random() * 50)));
+      const verifyRes = await withGoogleRetry(
+        () =>
+          sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${TAB_AUCTION_STATE}!N2`,
+          }),
+        { operationName: "VerifyLeaseLock" }
+      );
+      const confirmedToken = verifyRes.data.values?.[0]?.[0];
+      if (confirmedToken && confirmedToken !== lockToken) {
+        return {
+          success: false,
+          error: "Lock contention conflict: Another transaction acquired the lease simultaneously. Please retry.",
+        };
+      }
     }
 
     try {
-      // 3. Execute action callback
+      // 5. Execute action callback
       const result = await actionFn({
         state: currentState,
         teams: currentTeams,
@@ -667,41 +1013,91 @@ export async function executeSerializedAuctionAction(
       if (!result.success) {
         // Release lock and abort
         if (isGoogleSheetsConfigured() && sheets && spreadsheetId) {
-          currentState.lockToken = null;
-          currentState.lockExpiresAt = null;
-          await saveAuctionStateToSheets(leagueId, currentState);
+          await withGoogleRetry(
+            () =>
+              sheets.spreadsheets.values.update({
+                spreadsheetId,
+                range: `${TAB_AUCTION_STATE}!N2:O2`,
+                valueInputOption: "RAW",
+                requestBody: { values: [["", ""]] },
+              }),
+            { operationName: "ReleaseLeaseLockOnFailure" }
+          ).catch(() => {});
         }
         return result;
       }
 
-      // 4. Commit results to Google Sheets
+      // 6. Consolidate updates into atomic batchUpdate
       const updatedState = result.newState || currentState;
       updatedState.version = (currentState.version || 1) + 1;
       updatedState.lockToken = null;
       updatedState.lockExpiresAt = null;
       updatedState.updatedAt = new Date().toISOString();
 
-      await saveAuctionStateToSheets(leagueId, updatedState);
+      if (isGoogleSheetsConfigured() && sheets && spreadsheetId) {
+        const batchData: Array<{ range: string; values: string[][] }> = [];
 
-      if (result.updatedTeams) {
-        await saveTeamsToSheets(leagueId, result.updatedTeams);
+        // Updated auction state row (A2:P2)
+        batchData.push({
+          range: `${TAB_AUCTION_STATE}!A2:P2`,
+          values: [serializeAuctionState(updatedState)],
+        });
+
+        // Updated teams (if modified)
+        if (result.updatedTeams && result.updatedTeams.length > 0) {
+          batchData.push({
+            range: `${TAB_TEAMS}!A2:T${result.updatedTeams.length + 1}`,
+            values: result.updatedTeams.map(serializeTeam),
+          });
+        }
+
+        // Updated players (if modified)
+        if (result.updatedPlayers && result.updatedPlayers.length > 0) {
+          batchData.push({
+            range: `${TAB_PLAYERS}!A2:V${result.updatedPlayers.length + 1}`,
+            values: result.updatedPlayers.map(serializePlayer),
+          });
+        }
+
+        // Commit consolidated values in ONE atomic batchUpdate request!
+        await withGoogleRetry(
+          () =>
+            sheets.spreadsheets.values.batchUpdate({
+              spreadsheetId,
+              requestBody: {
+                valueInputOption: "RAW",
+                data: batchData,
+              },
+            }),
+          { operationName: "BatchUpdateAuctionStateAndEntities" }
+        );
+
+        // Concurrent appends for bid history, purchase record, and audit log
+        const appends: Promise<unknown>[] = [];
+        if (result.newBid) {
+          appends.push(appendBidToSheets(leagueId, result.newBid));
+        }
+        if (result.newPurchase) {
+          appends.push(recordPurchaseInSheets(leagueId, result.newPurchase));
+        }
+        if (result.auditEntry) {
+          appends.push(appendAuditLogInSheets(leagueId, result.auditEntry));
+        }
+
+        if (appends.length > 0) {
+          await Promise.all(appends);
+        }
       }
 
-      if (result.updatedPlayers) {
-        await savePlayersToSheets(leagueId, result.updatedPlayers);
-      }
+      // Invalidate short-lived caches and sync local memory mirror
+      invalidateLeagueCache(leagueId);
+      const mirror = getOrCreateMemoryMirror(leagueId);
+      mirror.state = updatedState;
+      if (result.updatedTeams) mirror.teams = result.updatedTeams;
+      if (result.updatedPlayers) mirror.players = result.updatedPlayers;
 
-      if (result.newBid) {
-        await appendBidToSheets(leagueId, result.newBid);
-      }
-
-      if (result.newPurchase) {
-        await recordPurchaseInSheets(leagueId, result.newPurchase);
-      }
-
-      if (result.auditEntry) {
-        await appendAuditLogInSheets(leagueId, result.auditEntry);
-      }
+      // Store in idempotency cache
+      storeIdempotentResult(options?.actionId, result);
 
       return {
         ...result,
@@ -713,9 +1109,12 @@ export async function executeSerializedAuctionAction(
       // Attempt to clear lock on unexpected crash
       if (isGoogleSheetsConfigured() && sheets && spreadsheetId) {
         try {
-          currentState.lockToken = null;
-          currentState.lockExpiresAt = null;
-          await saveAuctionStateToSheets(leagueId, currentState);
+          await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `${TAB_AUCTION_STATE}!N2:O2`,
+            valueInputOption: "RAW",
+            requestBody: { values: [["", ""]] },
+          });
         } catch {}
       }
 
@@ -726,3 +1125,220 @@ export async function executeSerializedAuctionAction(
     }
   });
 }
+
+// ==============================================================================
+// DATA RECONCILIATION & RECOVERY UTILITY
+// Audits purchases, team purses, and player ownership to repair any inconsistencies
+// ==============================================================================
+
+export interface ReconciliationReport {
+  leagueId: string;
+  discrepanciesFound: number;
+  fixedTeams: Array<{
+    teamId: string;
+    teamName: string;
+    oldPurse: number;
+    newPurse: number;
+    oldPlayersCount: number;
+    newPlayersCount: number;
+  }>;
+  fixedPlayers: Array<{
+    playerId: string;
+    playerName: string;
+    field: string;
+    oldValue: unknown;
+    newValue: unknown;
+  }>;
+  totalPurchasesAudited: number;
+  totalPurseSpentAudited: number;
+  timestamp: string;
+}
+
+export async function reconcileLeaguePurchasesAndPurses(
+  leagueId: string
+): Promise<ReconciliationReport> {
+  return runSerialized(leagueId, async () => {
+    const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
+    const sheets = getGoogleSheetsClient();
+
+    // 1. Fetch latest raw records bypassing cache
+    const [purchases, teams, players] = await Promise.all([
+      getPurchasesFromSheets(leagueId),
+      getTeamsFromSheets(leagueId, true),
+      getPlayersFromSheets(leagueId, true),
+    ]);
+
+    const report: ReconciliationReport = {
+      leagueId,
+      discrepanciesFound: 0,
+      fixedTeams: [],
+      fixedPlayers: [],
+      totalPurchasesAudited: purchases.length,
+      totalPurseSpentAudited: 0,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Calculate total spend & player roster per team from canonical purchases
+    const teamSpendMap = new Map<string, number>();
+    const teamPlayerCountMap = new Map<string, number>();
+    for (const p of purchases) {
+      report.totalPurseSpentAudited += p.soldPrice || 0;
+      teamSpendMap.set(p.teamId, (teamSpendMap.get(p.teamId) || 0) + (p.soldPrice || 0));
+      teamPlayerCountMap.set(p.teamId, (teamPlayerCountMap.get(p.teamId) || 0) + 1);
+    }
+
+    // 2. Audit and fix Teams
+    let teamsChanged = false;
+    const reconciledTeams = teams.map((team) => {
+      const currentPurse = team.purse || {
+        id: `purse-${team.id}`,
+        teamId: team.id,
+        totalBudget: 5000000,
+        spentAmount: 0,
+        remainingAmount: 5000000,
+        minPlayers: 15,
+        maxPlayers: 18,
+        reservedForSquad: 350000,
+      };
+      const spent = teamSpendMap.get(team.id) || 0;
+      const expectedRemaining = Math.max(0, (currentPurse.totalBudget || 5000000) - spent);
+      const expectedPlayersCount = teamPlayerCountMap.get(team.id) || 0;
+
+      if (
+        currentPurse.remainingAmount !== expectedRemaining ||
+        currentPurse.spentAmount !== spent ||
+        (team.squadCount || 0) !== expectedPlayersCount
+      ) {
+        report.discrepanciesFound++;
+        report.fixedTeams.push({
+          teamId: team.id,
+          teamName: team.name,
+          oldPurse: currentPurse.remainingAmount,
+          newPurse: expectedRemaining,
+          oldPlayersCount: team.squadCount || 0,
+          newPlayersCount: expectedPlayersCount,
+        });
+        teamsChanged = true;
+        return {
+          ...team,
+          squadCount: expectedPlayersCount,
+          purse: {
+            ...currentPurse,
+            spentAmount: spent,
+            remainingAmount: expectedRemaining,
+          },
+        };
+      }
+      return team;
+    });
+
+    // 3. Audit and fix Players
+    let playersChanged = false;
+    const purchaseByPlayerId = new Map<string, PurchaseRecord>();
+    for (const p of purchases) {
+      purchaseByPlayerId.set(p.playerId, p);
+    }
+
+    const reconciledPlayers = players.map((player) => {
+      const canonicalPurchase = purchaseByPlayerId.get(player.id);
+      const updated = { ...player };
+
+      if (canonicalPurchase) {
+        if (player.status !== "SOLD") {
+          report.discrepanciesFound++;
+          report.fixedPlayers.push({
+            playerId: player.id,
+            playerName: player.fullName,
+            field: "status",
+            oldValue: player.status,
+            newValue: "SOLD",
+          });
+          updated.status = "SOLD";
+          playersChanged = true;
+        }
+        if (player.soldPrice !== canonicalPurchase.soldPrice) {
+          report.discrepanciesFound++;
+          report.fixedPlayers.push({
+            playerId: player.id,
+            playerName: player.fullName,
+            field: "soldPrice",
+            oldValue: player.soldPrice,
+            newValue: canonicalPurchase.soldPrice,
+          });
+          updated.soldPrice = canonicalPurchase.soldPrice;
+          playersChanged = true;
+        }
+        if (player.soldToTeamId !== canonicalPurchase.teamId) {
+          report.discrepanciesFound++;
+          report.fixedPlayers.push({
+            playerId: player.id,
+            playerName: player.fullName,
+            field: "soldToTeamId",
+            oldValue: player.soldToTeamId,
+            newValue: canonicalPurchase.teamId,
+          });
+          updated.soldToTeamId = canonicalPurchase.teamId;
+          playersChanged = true;
+        }
+      }
+
+      return updated;
+    });
+
+    // 4. If discrepancies found, commit atomically via batchUpdate
+    if (report.discrepanciesFound > 0) {
+      if (isGoogleSheetsConfigured() && sheets && spreadsheetId) {
+        const batchData: Array<{ range: string; values: string[][] }> = [];
+        if (teamsChanged && reconciledTeams.length > 0) {
+          batchData.push({
+            range: `${TAB_TEAMS}!A2:T${reconciledTeams.length + 1}`,
+            values: reconciledTeams.map(serializeTeam),
+          });
+        }
+        if (playersChanged && reconciledPlayers.length > 0) {
+          batchData.push({
+            range: `${TAB_PLAYERS}!A2:V${reconciledPlayers.length + 1}`,
+            values: reconciledPlayers.map(serializePlayer),
+          });
+        }
+
+        if (batchData.length > 0) {
+          await withGoogleRetry(
+            () =>
+              sheets.spreadsheets.values.batchUpdate({
+                spreadsheetId,
+                requestBody: {
+                  valueInputOption: "RAW",
+                  data: batchData,
+                },
+              }),
+            { operationName: "CommitReconciledData" }
+          );
+        }
+
+        // Record Audit Log entry
+        await appendAuditLogInSheets(leagueId, {
+          id: `reconcile-${Date.now()}`,
+          seasonId: leagueId,
+          actionType: "DATA_RECONCILIATION",
+          actor: "SYSTEM_RECONCILER",
+          detailsJson: JSON.stringify({
+            discrepanciesFound: report.discrepanciesFound,
+            fixedTeamsCount: report.fixedTeams.length,
+            fixedPlayersCount: report.fixedPlayers.length,
+          }),
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // Update memory mirror and invalidate cache
+      const mirror = getOrCreateMemoryMirror(leagueId);
+      if (teamsChanged) mirror.teams = reconciledTeams;
+      if (playersChanged) mirror.players = reconciledPlayers;
+      invalidateLeagueCache(leagueId);
+    }
+
+    return report;
+  });
+}
+

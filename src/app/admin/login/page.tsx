@@ -13,14 +13,32 @@ export default function AdminLoginPage() {
   const [email, setEmail] = useState("commissioner@ntlcricket.com");
   const [password, setPassword] = useState("••••••••••••");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    // Instant demo login transition to dashboard
-    setTimeout(() => {
+    setError(null);
+
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setError(data.error || "Authentication failed. Please verify credentials.");
+        setLoading(false);
+        return;
+      }
+
       router.push("/admin/dashboard");
-    }, 600);
+    } catch (err) {
+      setError((err as Error).message || "Network connection failure");
+      setLoading(false);
+    }
   };
 
   return (
@@ -81,6 +99,12 @@ export default function AdminLoginPage() {
                   />
                 </div>
               </div>
+
+              {error && (
+                <div className="p-2.5 rounded-lg bg-rose-950/60 border border-rose-500/50 text-rose-300 text-xs font-medium">
+                  {error}
+                </div>
+              )}
 
               <Button
                 type="submit"

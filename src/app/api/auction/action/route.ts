@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { processAuctionAction, AuctionActionPayload } from "@/lib/server/auction-store";
+import { authenticateAdminActionRequest } from "@/lib/auth/admin-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { success: false, error: "leagueId and type are required" },
         { status: 400 }
+      );
+    }
+
+    // 1. Authenticate mutating administrative request
+    const auth = authenticateAdminActionRequest(req, payload.leagueId);
+    if (!auth.authorized) {
+      return NextResponse.json(
+        { success: false, error: auth.error || "Unauthorized administrative action" },
+        { status: 401 }
       );
     }
 
