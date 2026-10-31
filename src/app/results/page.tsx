@@ -6,18 +6,16 @@ import { PublicNav } from "@/components/public/public-nav";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { formatCurrency, formatRole, getCategoryBadgeColor } from "@/lib/utils";
-import { MOCK_PLAYERS } from "@/lib/mock-data/players";
-import { MOCK_TEAMS } from "@/lib/mock-data/teams";
 import { useLeague } from "@/lib/context/league-context";
 import { Search, CheckCircle2, XCircle, Clock } from "lucide-react";
 
 export default function ResultsPage() {
-  const { activeLeague } = useLeague();
+  const { activeLeague, players, teams } = useLeague();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [categoryFilter, setCategoryFilter] = useState<string>("ALL");
 
-  const filteredPlayers = MOCK_PLAYERS.filter((player) => {
+  const filteredPlayers = players.filter((player) => {
     const matchesSearch =
       player.fullName.toLowerCase().includes(search.toLowerCase()) ||
       player.registrationNo.toLowerCase().includes(search.toLowerCase());
@@ -30,7 +28,7 @@ export default function ResultsPage() {
 
   const getTeamName = (teamId?: string) => {
     if (!teamId) return null;
-    return MOCK_TEAMS.find((t) => t.id === teamId)?.name || "Franchise";
+    return teams.find((t) => t.id === teamId)?.name || "Franchise";
   };
 
   return (

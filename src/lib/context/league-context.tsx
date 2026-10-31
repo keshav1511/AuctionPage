@@ -1,22 +1,25 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { League, BrandingPalette } from "@/types";
+import { League, BrandingPalette, Team, Player, AuctionRules } from "@/types";
 import { generateSportsBrandingPalette } from "@/lib/branding/theme-generator";
+import { MOCK_TEAMS } from "@/lib/mock-data/teams";
+import { MOCK_PLAYERS } from "@/lib/mock-data/players";
+import { MOCK_RULES } from "@/lib/mock-data/auction";
 
 export const INITIAL_LEAGUES: League[] = [
   {
     id: "league-ntl",
     slug: "nalanda-turf-league",
     name: "Nalanda Turf League",
-    description: "Premier cricket auction championship featuring 6 elite franchises in Nalanda District.",
+    description: "Premier cricket auction championship featuring elite franchises.",
     logoUrl: "https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?w=200&auto=format&fit=crop&q=80",
     matchDate: "2026-11-20",
     matchVenue: "Perfect Pass, Falnir",
     auctionDate: "2026-11-05",
     auctionTime: "18:00",
     timezone: "Asia/Kolkata",
-    googleSheetsUrl: "https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit",
+    googleSheetsUrl: "https://docs.google.com/spreadsheets/d/1uC87Sn8KLbAHs9g1ZT63AIyIY85C7LVh-cZF8dvvgo0/edit?usp=sharing",
     googleDriveFolderUrl: "https://drive.google.com/drive/folders/1MtjUStUIqnlQic13-sfML_NbPygEkSwpUsgDe7b3hHJ1GGKbP7xvSHx3MI11kTS7CgVaT2hA",
     primaryColor: "#059669",
     secondaryColor: "#F59E0B",
@@ -60,10 +63,21 @@ export const INITIAL_LEAGUES: League[] = [
 interface LeagueContextType {
   activeLeague: League;
   leagues: League[];
+  teams: Team[];
+  players: Player[];
+  auctionRules: AuctionRules;
   switchLeague: (leagueId: string) => void;
   createLeague: (newLeague: Omit<League, "id">) => League;
   updateLeague: (leagueId: string, updates: Partial<League>) => void;
   updateLeaguePalette: (leagueId: string, palette: BrandingPalette) => void;
+  addTeam: (team: Team) => void;
+  updateTeam: (teamId: string, updates: Partial<Team>) => void;
+  deleteTeam: (teamId: string) => void;
+  setTeamsForActiveLeague: (teams: Team[]) => void;
+  addPlayers: (newPlayers: Player[]) => void;
+  updatePlayer: (playerId: string, updates: Partial<Player>) => void;
+  setPlayersForActiveLeague: (players: Player[]) => void;
+  updateAuctionRules: (rules: Partial<AuctionRules>) => void;
 }
 
 const LeagueContext = createContext<LeagueContextType | undefined>(undefined);
@@ -75,7 +89,11 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
   const [leagues, setLeagues] = useState<League[]>(INITIAL_LEAGUES);
   const [activeLeagueId, setActiveLeagueId] = useState<string>(INITIAL_LEAGUES[0].id);
 
-  // Load from local storage on client mount
+  const [teams, setTeams] = useState<Team[]>(MOCK_TEAMS);
+  const [players, setPlayers] = useState<Player[]>(MOCK_PLAYERS);
+  const [auctionRules, setAuctionRules] = useState<AuctionRules>(MOCK_RULES);
+
+  // Load leagues from local storage on client mount
   useEffect(() => {
     try {
       const storedLeagues = localStorage.getItem(LEAGUES_STORAGE_KEY);
@@ -90,6 +108,32 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
       // Local storage unavailable
     }
   }, []);
+
+  // Sync teams, players, and rules whenever activeLeagueId changes
+  useEffect(() => {
+    try {
+      const storedTeams = localStorage.getItem(`ntl_teams_${activeLeagueId}`);
+      if (storedTeams) {
+        setTeams(JSON.parse(storedTeams));
+      } else {
+        setTeams(MOCK_TEAMS.map((t) => ({ ...t, seasonId: activeLeagueId })));
+      }
+
+      const storedPlayers = localStorage.getItem(`ntl_players_${activeLeagueId}`);
+      if (storedPlayers) {
+        setPlayers(JSON.parse(storedPlayers));
+      } else {
+        setPlayers(MOCK_PLAYERS.map((p) => ({ ...p, seasonId: activeLeagueId })));
+      }
+
+      const storedRules = localStorage.getItem(`ntl_rules_${activeLeagueId}`);
+      if (storedRules) {
+        setAuctionRules(JSON.parse(storedRules));
+      } else {
+        setAuctionRules({ ...MOCK_RULES, seasonId: activeLeagueId });
+      }
+    } catch {}
+  }, [activeLeagueId]);
 
   const activeLeague = leagues.find((l) => l.id === activeLeagueId) || leagues[0];
 
@@ -165,15 +209,91 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  // Team Management Methods
+  const addTeam = (team: Team) => {
+    const updated = [...teams, team];
+    setTeams(updated);
+    try {
+      localStorage.setItem(`ntl_teams_${activeLeagueId}`, JSON.stringify(updated));
+    } catch {}
+  };
+
+  const updateTeam = (teamId: string, updates: Partial<Team>) => {
+    const updated = teams.map((t) => (t.id === teamId ? { ...t, ...updates } : t));
+    setTeams(updated);
+    try {
+      localStorage.setItem(`ntl_teams_${activeLeagueId}`, JSON.stringify(updated));
+    } catch {}
+  };
+
+  const deleteTeam = (teamId: string) => {
+    const updated = teams.filter((t) => t.id !== teamId);
+    setTeams(updated);
+    try {
+      localStorage.setItem(`ntl_teams_${activeLeagueId}`, JSON.stringify(updated));
+    } catch {}
+  };
+
+  const setTeamsForActiveLeague = (newTeams: Team[]) => {
+    setTeams(newTeams);
+    try {
+      localStorage.setItem(`ntl_teams_${activeLeagueId}`, JSON.stringify(newTeams));
+    } catch {}
+  };
+
+  // Player Management Methods
+  const addPlayers = (newPlayers: Player[]) => {
+    const updated = [...players, ...newPlayers];
+    setPlayers(updated);
+    try {
+      localStorage.setItem(`ntl_players_${activeLeagueId}`, JSON.stringify(updated));
+    } catch {}
+  };
+
+  const updatePlayer = (playerId: string, updates: Partial<Player>) => {
+    const updated = players.map((p) => (p.id === playerId ? { ...p, ...updates } : p));
+    setPlayers(updated);
+    try {
+      localStorage.setItem(`ntl_players_${activeLeagueId}`, JSON.stringify(updated));
+    } catch {}
+  };
+
+  const setPlayersForActiveLeague = (newPlayers: Player[]) => {
+    setPlayers(newPlayers);
+    try {
+      localStorage.setItem(`ntl_players_${activeLeagueId}`, JSON.stringify(newPlayers));
+    } catch {}
+  };
+
+  // Auction Rules Methods
+  const updateAuctionRules = (rulesUpdates: Partial<AuctionRules>) => {
+    const updated = { ...auctionRules, ...rulesUpdates };
+    setAuctionRules(updated);
+    try {
+      localStorage.setItem(`ntl_rules_${activeLeagueId}`, JSON.stringify(updated));
+    } catch {}
+  };
+
   return (
     <LeagueContext.Provider
       value={{
         activeLeague,
         leagues,
+        teams,
+        players,
+        auctionRules,
         switchLeague,
         createLeague,
         updateLeague,
         updateLeaguePalette,
+        addTeam,
+        updateTeam,
+        deleteTeam,
+        setTeamsForActiveLeague,
+        addPlayers,
+        updatePlayer,
+        setPlayersForActiveLeague,
+        updateAuctionRules,
       }}
     >
       {children}
@@ -188,3 +308,4 @@ export function useLeague() {
   }
   return context;
 }
+

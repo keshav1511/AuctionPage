@@ -1,120 +1,148 @@
-"use client";
+﻿"use client";
 
-import { useState } from "react";
-import Image from "next/image";
 import { AdminNav } from "@/components/admin/admin-nav";
 import { AdminHeader } from "@/components/admin/admin-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, getCategoryBadgeColor } from "@/lib/utils";
-import { MOCK_PLAYERS } from "@/lib/mock-data/players";
-import { MOCK_TEAMS } from "@/lib/mock-data/teams";
-import { CheckCircle2, XCircle, RotateCcw } from "lucide-react";
+import { useLeague } from "@/lib/context/league-context";
+import { CheckCircle2, XCircle, RotateCcw, Award, User } from "lucide-react";
 
 export default function AdminResultsPage() {
-  const [players, setPlayers] = useState(MOCK_PLAYERS);
+  const { activeLeague, players, updatePlayer, teams } = useLeague();
 
   const getTeamName = (teamId?: string) => {
     if (!teamId) return "-";
-    return MOCK_TEAMS.find((t) => t.id === teamId)?.name || "-";
+    return teams.find((t) => t.id === teamId)?.name || "-";
   };
 
   const handleRequeue = (playerId: string) => {
-    setPlayers((prev) =>
-      prev.map((p) => {
-        if (p.id === playerId) {
-          return { ...p, status: "AVAILABLE", soldToTeamId: undefined, soldPrice: undefined };
-        }
-        return p;
-      })
-    );
+    updatePlayer(playerId, {
+      status: "AVAILABLE",
+      soldToTeamId: undefined,
+      soldPrice: undefined,
+    });
   };
 
+  const soldCount = players.filter((p) => p.status === "SOLD").length;
+  const unsoldCount = players.filter((p) => p.status === "UNSOLD").length;
+  const pendingCount = players.filter((p) => p.status === "AVAILABLE").length;
+
   return (
-    <div className="min-h-screen bg-[#070A0D] flex text-slate-100">
+    <div className="min-h-screen bg-slate-50 flex text-slate-900 font-sans">
       <AdminNav />
 
       <div className="flex-1 flex flex-col min-w-0">
         <AdminHeader
-          title="Auction Results & Reconciliation"
-          subtitle="Review completed lots, finalize sales, or requeue unsold players for Round 2"
+          title="Auction Results & Ledger"
+          subtitle={`${activeLeague.name} • Reconcile sales, verify contracts, or requeue unsold lots`}
         />
 
-        <main className="p-8 space-y-6 flex-1 overflow-y-auto max-w-7xl">
-          <div className="border border-slate-800 rounded-xl overflow-hidden bg-charcoal-900">
+        <main className="p-6 sm:p-8 space-y-6 max-w-6xl">
+          {/* Summary Pills */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex items-center justify-between">
+              <div>
+                <span className="text-xs text-slate-500 font-medium">Sold Lots</span>
+                <div className="text-2xl font-bold text-slate-900 mt-1">{soldCount}</div>
+              </div>
+              <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+            </div>
+
+            <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex items-center justify-between">
+              <div>
+                <span className="text-xs text-slate-500 font-medium">Unsold Lots</span>
+                <div className="text-2xl font-bold text-slate-900 mt-1">{unsoldCount}</div>
+              </div>
+              <XCircle className="w-6 h-6 text-amber-600" />
+            </div>
+
+            <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex items-center justify-between">
+              <div>
+                <span className="text-xs text-slate-500 font-medium">Pending Lots</span>
+                <div className="text-2xl font-bold text-slate-900 mt-1">{pendingCount}</div>
+              </div>
+              <Award className="w-6 h-6 text-blue-600" />
+            </div>
+          </div>
+
+          {/* Results Table */}
+          <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
             <table className="w-full text-left text-xs">
-              <thead className="bg-charcoal-950 border-b border-slate-800 text-slate-400 font-semibold uppercase">
+              <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
                 <tr>
-                  <th className="p-3.5">Athlete</th>
-                  <th className="p-3.5">Pool Tier</th>
-                  <th className="p-3.5">Base Price</th>
-                  <th className="p-3.5">Outcome</th>
-                  <th className="p-3.5">Winning Team</th>
-                  <th className="p-3.5">Sold Amount</th>
-                  <th className="p-3.5 text-right">Reconciliation</th>
+                  <th className="p-3 pl-4">Player</th>
+                  <th className="p-3">Category</th>
+                  <th className="p-3">Base Price</th>
+                  <th className="p-3">Status</th>
+                  <th className="p-3">Winning Franchise</th>
+                  <th className="p-3">Final Amount</th>
+                  <th className="p-3 text-right pr-4">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800">
+              <tbody className="divide-y divide-slate-100">
                 {players.map((p) => (
-                  <tr key={p.id} className="hover:bg-slate-900/60 transition-colors">
-                    <td className="p-3.5">
+                  <tr key={p.id} className="hover:bg-slate-50/80 transition-colors">
+                    <td className="p-3 pl-4">
                       <div className="flex items-center gap-3">
-                        <div className="relative w-8 h-8 rounded-lg overflow-hidden bg-slate-800 shrink-0">
-                          <Image src={p.photoUrl} alt={p.fullName} fill className="object-cover" />
+                        <div className="w-8 h-10 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 shadow-sm flex items-center justify-center">
+                          {p.photoUrl ? (
+                            <img src={p.photoUrl} alt={p.fullName} className="w-full h-full object-cover" />
+                          ) : (
+                            <User className="w-4 h-4 text-slate-400" />
+                          )}
                         </div>
-                        <span className="font-bold text-white">{p.fullName}</span>
+                        <div>
+                          <div className="font-bold text-slate-900">{p.fullName}</div>
+                          <div className="font-mono text-[10px] text-slate-400">{p.registrationNo}</div>
+                        </div>
                       </div>
                     </td>
 
-                    <td className="p-3.5">
-                      <Badge
-                        variant="gold"
-                        className={`text-[10px] ${getCategoryBadgeColor(p.category)}`}
-                      >
+                    <td className="p-3">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getCategoryBadgeColor(p.category)}`}>
                         {p.category}
-                      </Badge>
+                      </span>
                     </td>
 
-                    <td className="p-3.5 font-mono text-slate-400">
-                      {formatCurrency(p.basePrice)}
+                    <td className="p-3 font-mono text-slate-600">
+                      {formatCurrency(p.basePriceOverride || p.basePrice)}
                     </td>
 
-                    <td className="p-3.5">
-                      {p.status === "SOLD" && (
-                        <span className="inline-flex items-center gap-1 text-emerald-400 font-bold text-xs">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> SOLD
-                        </span>
-                      )}
-                      {p.status === "UNSOLD" && (
-                        <span className="inline-flex items-center gap-1 text-red-400 font-bold text-xs">
-                          <XCircle className="w-3.5 h-3.5" /> UNSOLD
-                        </span>
-                      )}
-                      {p.status === "AVAILABLE" && (
-                        <span className="text-slate-500 font-medium">QUEUED</span>
-                      )}
-                      {p.status === "ON_AUCTION" && (
-                        <span className="text-amber-400 font-bold">ON STAGE</span>
+                    <td className="p-3">
+                      {p.status === "SOLD" ? (
+                        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] font-bold">
+                          SOLD
+                        </Badge>
+                      ) : p.status === "UNSOLD" ? (
+                        <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] font-bold">
+                          UNSOLD
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-slate-100 text-slate-500 border-slate-200 text-[10px]">
+                          AVAILABLE
+                        </Badge>
                       )}
                     </td>
 
-                    <td className="p-3.5 font-bold text-white">
+                    <td className="p-3 font-semibold text-slate-800">
                       {getTeamName(p.soldToTeamId)}
                     </td>
 
-                    <td className="p-3.5 font-mono font-bold text-emerald-400">
+                    <td className="p-3 font-mono font-bold text-slate-900">
                       {p.soldPrice ? formatCurrency(p.soldPrice) : "-"}
                     </td>
 
-                    <td className="p-3.5 text-right">
+                    <td className="p-3 text-right pr-4">
                       {p.status === "UNSOLD" && (
                         <Button
-                          variant="outline"
                           size="sm"
+                          variant="outline"
                           onClick={() => handleRequeue(p.id)}
-                          className="h-7 text-[10px] gap-1 text-amber-300 border-amber-500/30"
+                          className="text-[11px] h-7 border-slate-200 text-slate-700 hover:bg-slate-100 gap-1 font-medium"
                         >
-                          <RotateCcw className="w-3 h-3" /> Requeue Round 2
+                          <RotateCcw className="w-3 h-3" />
+                          Requeue
                         </Button>
                       )}
                     </td>

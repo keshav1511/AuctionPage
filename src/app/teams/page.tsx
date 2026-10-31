@@ -8,16 +8,15 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { formatCurrency } from "@/lib/utils";
 import { MOCK_TEAMS } from "@/lib/mock-data/teams";
-import { MOCK_PLAYERS } from "@/lib/mock-data/players";
 import { useLeague } from "@/lib/context/league-context";
 import { Users } from "lucide-react";
 
 export default function TeamsPage() {
-  const { activeLeague } = useLeague();
-  const [selectedTeamId, setSelectedTeamId] = useState<string>(MOCK_TEAMS[0].id);
+  const { activeLeague, teams, players } = useLeague();
+  const [selectedTeamId, setSelectedTeamId] = useState<string>(teams[0]?.id || MOCK_TEAMS[0].id);
 
-  const selectedTeam = MOCK_TEAMS.find((t) => t.id === selectedTeamId) || MOCK_TEAMS[0];
-  const acquiredPlayers = MOCK_PLAYERS.filter((p) => p.soldToTeamId === selectedTeam.id);
+  const selectedTeam = teams.find((t) => t.id === selectedTeamId) || teams[0] || MOCK_TEAMS[0];
+  const acquiredPlayers = players.filter((p) => p.soldToTeamId === selectedTeam.id);
 
   return (
     <div className="min-h-screen bg-[#090D10] text-slate-100 flex flex-col">
@@ -39,7 +38,7 @@ export default function TeamsPage() {
 
         {/* Team Selector Tabs */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-8">
-          {MOCK_TEAMS.map((team) => {
+          {teams.map((team) => {
             const isSelected = team.id === selectedTeamId;
             return (
               <button

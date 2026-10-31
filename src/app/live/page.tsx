@@ -13,7 +13,6 @@ import {
   getRoleBadgeColor,
 } from "@/lib/utils";
 import { MOCK_AUCTION_SESSION } from "@/lib/mock-data/auction";
-import { MOCK_TEAMS } from "@/lib/mock-data/teams";
 import { MOCK_PLAYERS } from "@/lib/mock-data/players";
 import { useLeague } from "@/lib/context/league-context";
 import {
@@ -24,11 +23,10 @@ import {
 } from "lucide-react";
 
 export default function LiveAuctionStage() {
-  const { activeLeague } = useLeague();
+  const { activeLeague, teams, players } = useLeague();
   const [session] = useState(MOCK_AUCTION_SESSION);
   const [timer, setTimer] = useState(session.timerSeconds);
   const [isHammered, setIsHammered] = useState(false);
-  const [teams] = useState(MOCK_TEAMS);
 
   // Countdown timer simulation
   useEffect(() => {
@@ -39,8 +37,8 @@ export default function LiveAuctionStage() {
     return () => clearInterval(interval);
   }, [timer, isHammered]);
 
-  const player = session.currentPlayer || MOCK_PLAYERS[0];
-  const leadingTeam = session.currentLeadingTeam || teams[4];
+  const player = session.currentPlayer || players[0] || MOCK_PLAYERS[0];
+  const leadingTeam = session.currentLeadingTeam || teams[0];
 
   // Trigger celebratory confetti when sold
   const triggerSoldCelebration = () => {

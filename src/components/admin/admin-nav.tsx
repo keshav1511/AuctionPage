@@ -1,31 +1,30 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
+  Trophy,
   Users,
   UserCheck,
   Sliders,
   Gavel,
-  Trophy,
+  Award,
   FileSpreadsheet,
-  LogOut,
   ExternalLink,
-  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
 
 const NAV_ITEMS = [
-  { label: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
-  { label: "Auction Control", href: "/admin/auction-control", icon: Gavel, badge: "LIVE" },
-  { label: "League Management", href: "/admin/leagues", icon: Layers },
-  { label: "Team Management", href: "/admin/teams", icon: Users },
-  { label: "Player Management", href: "/admin/players", icon: UserCheck },
-  { label: "Auction Results", href: "/admin/results", icon: Trophy },
+  { label: "Overview", href: "/admin/dashboard", icon: LayoutDashboard },
+  { label: "Tournament Setup", href: "/admin/setup", icon: Trophy },
+  { label: "Teams", href: "/admin/teams", icon: Users },
+  { label: "Players", href: "/admin/players", icon: UserCheck },
   { label: "Auction Settings", href: "/admin/settings", icon: Sliders },
-  { label: "Reports & Export", href: "/admin/reports", icon: FileSpreadsheet },
+  { label: "Live Auction", href: "/admin/auction-control", icon: Gavel, badge: "Live" },
+  { label: "Results", href: "/admin/results", icon: Award },
+  { label: "Reports", href: "/admin/reports", icon: FileSpreadsheet },
 ];
 
 export function AdminNav() {
@@ -33,50 +32,58 @@ export function AdminNav() {
   const { activeLeague } = useLeague();
 
   return (
-    <aside className="w-64 border-r border-slate-800 bg-charcoal-950 flex flex-col justify-between shrink-0 min-h-screen">
+    <aside className="w-64 border-r border-slate-200 bg-white flex flex-col justify-between shrink-0 min-h-screen text-slate-700">
       <div>
-        {/* Brand header */}
-        <div className="p-6 border-b border-slate-800">
+        {/* Brand Header */}
+        <div className="p-5 border-b border-slate-200">
           <div className="flex items-center gap-3">
             <div
-              className="w-10 h-10 rounded-lg flex items-center justify-center font-black text-white text-xl shadow-lg border border-white/20"
-              style={{ backgroundColor: activeLeague.primaryColor }}
+              className="w-9 h-9 rounded-lg flex items-center justify-center font-bold text-white text-base shadow-sm"
+              style={{ backgroundColor: activeLeague.primaryColor || "#059669" }}
             >
               {activeLeague.name.charAt(0)}
             </div>
             <div className="min-w-0">
-              <h2 className="font-bold text-white text-sm tracking-wide leading-tight truncate">
+              <h2 className="font-bold text-slate-900 text-sm tracking-tight truncate leading-tight">
                 {activeLeague.name}
               </h2>
-              <p className="text-[11px] text-emerald-400 font-medium truncate">
-                {activeLeague.matchVenue || "Admin Desk"}
+              <p className="text-[11px] text-slate-500 font-medium truncate mt-0.5">
+                {activeLeague.matchVenue || "Auction Admin"}
               </p>
             </div>
           </div>
         </div>
 
-        {/* Links */}
-        <nav className="p-4 space-y-1.5">
+        {/* Navigation Links */}
+        <nav className="p-3 space-y-1">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
-            const isActive = pathname === item.href;
+            const isActive =
+              pathname === item.href ||
+              (item.href === "/admin/setup" && pathname === "/admin/leagues");
+
             return (
               <Link
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "flex items-center justify-between px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors",
+                  "flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium transition-colors",
                   isActive
-                    ? "bg-emerald-600/20 text-emerald-300 border border-emerald-500/30"
-                    : "text-slate-400 hover:text-white hover:bg-slate-900"
+                    ? "bg-slate-100 text-slate-900 font-semibold"
+                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
                 )}
               >
-                <div className="flex items-center gap-3">
-                  <Icon className={cn("w-4 h-4", isActive ? "text-emerald-400" : "text-slate-400")} />
+                <div className="flex items-center gap-2.5">
+                  <Icon
+                    className={cn(
+                      "w-4 h-4",
+                      isActive ? "text-slate-900" : "text-slate-400"
+                    )}
+                  />
                   <span>{item.label}</span>
                 </div>
                 {item.badge && (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse">
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                     {item.badge}
                   </span>
                 )}
@@ -86,25 +93,18 @@ export function AdminNav() {
         </nav>
       </div>
 
-      {/* Footer link to public stage */}
-      <div className="p-4 border-t border-slate-800 space-y-2">
+      {/* Footer link to public broadcast stage */}
+      <div className="p-4 border-t border-slate-200">
         <Link
           href="/live"
           target="_blank"
-          className="flex items-center justify-between px-3.5 py-2.5 rounded-lg text-xs font-semibold bg-charcoal-900 text-amber-300 border border-amber-500/30 hover:bg-amber-500/10 transition-colors"
+          className="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold bg-slate-50 text-slate-700 border border-slate-200 hover:bg-slate-100 transition-colors"
         >
           <span className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
-            Open Public Stage
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            Public Broadcast View
           </span>
-          <ExternalLink className="w-3.5 h-3.5" />
-        </Link>
-        <Link
-          href="/admin/login"
-          className="flex items-center gap-3 px-3.5 py-2 rounded-lg text-xs font-medium text-slate-500 hover:text-red-400 transition-colors"
-        >
-          <LogOut className="w-3.5 h-3.5" />
-          <span>Exit Session</span>
+          <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
         </Link>
       </div>
     </aside>

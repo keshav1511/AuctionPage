@@ -1,119 +1,99 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
 import { AdminNav } from "@/components/admin/admin-nav";
 import { AdminHeader } from "@/components/admin/admin-header";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatRole, getCategoryBadgeColor } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
-import { MOCK_PLAYERS } from "@/lib/mock-data/players";
+import { ImportModal } from "@/components/admin/import-modal";
 import { Player } from "@/types";
+import {
+  matchEntitiesWithDriveFiles,
+  MatchEntity,
+  EntityMatchResult,
+} from "@/lib/google/drive-matcher";
 import {
   FileSpreadsheet,
   Search,
   RefreshCw,
   FolderSync,
-  AlertTriangle,
   CheckCircle2,
   Image as ImageIcon,
   Check,
-  Edit2,
+  Upload,
+  User,
+  Shield,
+  Award,
+  Users,
+  ArrowRight,
+  Filter,
 } from "lucide-react";
+import Link from "next/link";
 
 export default function AdminPlayersPage() {
-  const { activeLeague } = useLeague();
-  const [players, setPlayers] = useState<Player[]>(MOCK_PLAYERS);
+  const { activeLeague, players, setPlayersForActiveLeague, teams, updateTeam } = useLeague();
+
   const [search, setSearch] = useState("");
-  const [successNotice, setSuccessNotice] = useState<string | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState<string>("ALL");
+  const [activeTab, setActiveTab] = useState<"directory" | "photo_matching">("directory");
+  const [photoSubTab, setPhotoSubTab] = useState<"players" | "owners" | "icons">("players");
 
-  // Sheets Sync Modal State
-  const [showSheetsModal, setShowSheetsModal] = useState(false);
-  const [sheetUrl, setSheetUrl] = useState(
-    activeLeague.googleSheetsUrl ||
-      "https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"
-  );
-  const [isSyncingSheets, setIsSyncingSheets] = useState(false);
-  const [sheetsPreviewData, setSheetsPreviewData] = useState<Player[] | null>(null);
-  const [duplicateWarnings, setDuplicateWarnings] = useState<string[]>([]);
-  const [missingInfoWarnings, setMissingInfoWarnings] = useState<string[]>([]);
-
-  // Drive Photo Matching State
+  const [showImportModal, setShowImportModal] = useState(false);
   const [isMatchingDrive, setIsMatchingDrive] = useState(false);
   const [driveSyncStatus, setDriveSyncStatus] = useState<string | null>(null);
-  const [editingPlayerPhoto, setEditingPlayerPhoto] = useState<string | null>(null);
-  const [manualPhotoUrl, setManualPhotoUrl] = useState<string>("");
+  const [successNotice, setSuccessNotice] = useState<string | null>(null);
 
-  const filtered = players.filter(
-    (p) =>
+  // Photo matching results state
+  const [entityMatches, setEntityMatches] = useState<EntityMatchResult[]>([]);
+  const [driveFilesList, setDriveFilesList] = useState<Array<{ id: string; name: string; directUrl?: string }>>([]);
+
+  // Filtered Players for Directory Tab
+  const filteredPlayers = players.filter((p) => {
+    const matchesSearch =
       p.fullName.toLowerCase().includes(search.toLowerCase()) ||
-      p.registrationNo.toLowerCase().includes(search.toLowerCase())
-  );
+      p.registrationNo.toLowerCase().includes(search.toLowerCase());
+    const matchesCategory = categoryFilter === "ALL" || p.category === categoryFilter;
+    return matchesSearch && matchesCategory;
+  });
 
-  /**
-   * Connects to Google Sheets, validates rows, detects duplicates & missing information
-   */
-  const handleConnectAndPreviewSheets = async () => {
-    setIsSyncingSheets(true);
-    setDuplicateWarnings([]);
-    setMissingInfoWarnings([]);
-
-    try {
-      const res = await fetch("/api/sheets/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spreadsheetId: sheetUrl }),
-      });
-      const data = await res.json();
-      const rawPlayers = data.players || MOCK_PLAYERS;
-
-      // Duplicate and missing field checks
-      const duplicates: string[] = [];
-      const missing: string[] = [];
-      const seenNames = new Set<string>();
-
-      rawPlayers.forEach((p: Player) => {
-        const lowerName = p.fullName.toLowerCase().trim();
-        if (seenNames.has(lowerName)) {
-          duplicates.push(`Duplicate athlete detected: "${p.fullName}"`);
-        }
-        seenNames.add(lowerName);
-
-        if (!p.category) {
-          missing.push(`Missing tier category for: "${p.fullName}" (Assigned Silver floor)`);
-        }
-        if (!p.basePrice || p.basePrice <= 0) {
-          missing.push(`Missing base price for: "${p.fullName}"`);
-        }
-      });
-
-      setDuplicateWarnings(duplicates);
-      setMissingInfoWarnings(missing);
-      setSheetsPreviewData(rawPlayers);
-    } catch {
-      setSheetsPreviewData(MOCK_PLAYERS);
-    } finally {
-      setIsSyncingSheets(false);
+  // Handle data import from Sheets or Excel
+  const handleImportComplete = (data: {
+    players: Player[];
+    owners: Array<{ name: string; photoUrl?: string }>;
+    icons: Array<{ name: string; photoUrl?: string }>;
+  }) => {
+    if (data.players.length > 0) {
+      setPlayersForActiveLeague(data.players);
     }
-  };
 
-  /**
-   * Commits approved players from Google Sheets into the league registry
-   */
-  const handleFinalizeImport = () => {
-    if (!sheetsPreviewData) return;
-    setPlayers(sheetsPreviewData);
-    setShowSheetsModal(false);
-    setSheetsPreviewData(null);
-    setSuccessNotice(`Successfully imported ${sheetsPreviewData.length} players into ${activeLeague.name}!`);
+    // Auto-associate imported owners and icons with teams if matching or unassigned
+    if (data.owners.length > 0 || data.icons.length > 0) {
+      teams.forEach((team, idx) => {
+        const matchingOwner = data.owners[idx];
+        const matchingIcon = data.icons[idx];
+
+        if (matchingOwner || matchingIcon) {
+          updateTeam(team.id, {
+            ownerName: matchingOwner?.name || team.ownerName,
+            ownerPhotoUrl: matchingOwner?.photoUrl || team.ownerPhotoUrl,
+            iconPlayerName: matchingIcon?.name || team.iconPlayerName,
+            iconPlayerPhotoUrl: matchingIcon?.photoUrl || team.iconPlayerPhotoUrl,
+          });
+        }
+      });
+    }
+
+    setSuccessNotice(
+      `Import complete: ${data.players.length} players, ${data.icons.length} icon players, and ${data.owners.length} owners added.`
+    );
     setTimeout(() => setSuccessNotice(null), 4000);
   };
 
-  /**
-   * Triggers Google Drive Photograph Matching & 3:4 Normalization Pipeline
-   */
+  // Run Google Drive Photo Sync & Multi-Entity Matching
   const handleRunDriveSync = async () => {
     setIsMatchingDrive(true);
     setDriveSyncStatus("Connecting to Google Drive folder API v3...");
@@ -126,414 +106,567 @@ export default function AdminPlayersPage() {
       });
       const data = await res.json();
 
-      if (data.success && data.matchSummary) {
-        interface MatchRecord {
-          playerId: string;
-          fileUrl: string;
-          fileId: string;
-        }
-        const matches: MatchRecord[] = data.matchSummary.matches;
+      if (data.success && data.files) {
+        setDriveFilesList(data.files);
 
-        // Update player photos with matched Drive photos
-        setPlayers((prev) =>
-          prev.map((p) => {
-            const match = matches.find((m) => m.playerId === p.id);
-            if (match) {
+        // Build entities to match: Players, Owners, Icons separately!
+        const entitiesToMatch: MatchEntity[] = [
+          ...players.map((p) => ({
+            id: p.id,
+            name: p.fullName,
+            type: "PLAYER" as const,
+            currentPhotoUrl: p.photoUrl,
+          })),
+          ...teams.map((t) => ({
+            id: `owner-${t.id}`,
+            name: t.ownerName,
+            type: "OWNER" as const,
+            teamId: t.id,
+            teamName: t.name,
+            currentPhotoUrl: t.ownerPhotoUrl,
+          })),
+          ...teams.map((t) => ({
+            id: `icon-${t.id}`,
+            name: t.iconPlayerName || "Icon",
+            type: "ICON" as const,
+            teamId: t.id,
+            teamName: t.name,
+            currentPhotoUrl: t.iconPlayerPhotoUrl,
+          })),
+        ];
+
+        const matchSummary = matchEntitiesWithDriveFiles(entitiesToMatch, data.files);
+        setEntityMatches(matchSummary.results);
+
+        // Apply automatic high-confidence player matches
+        setPlayersForActiveLeague(
+          players.map((p) => {
+            const match = matchSummary.players.find((m) => m.entityId === p.id && m.status === "AUTO_MATCHED");
+            if (match && match.fileUrl) {
               return {
                 ...p,
                 photoUrl: match.fileUrl,
-                originalPhotoUrl: match.fileUrl,
                 normalizedPhotoUrl: match.fileUrl,
                 photoMatchStatus: "MATCHED",
                 driveFileId: match.fileId,
               };
             }
-            return {
-              ...p,
-              photoMatchStatus: p.photoMatchStatus === "MANUAL_OVERRIDE" ? "MANUAL_OVERRIDE" : "UNMATCHED",
-            };
+            return p;
           })
         );
 
+        // Apply automatic owner & icon matches to teams
+        teams.forEach((t) => {
+          const ownerMatch = matchSummary.owners.find((m) => m.entityId === `owner-${t.id}` && m.status === "AUTO_MATCHED");
+          const iconMatch = matchSummary.icons.find((m) => m.entityId === `icon-${t.id}` && m.status === "AUTO_MATCHED");
+
+          if (ownerMatch || iconMatch) {
+            updateTeam(t.id, {
+              ownerPhotoUrl: ownerMatch?.fileUrl || t.ownerPhotoUrl,
+              iconPlayerPhotoUrl: iconMatch?.fileUrl || t.iconPlayerPhotoUrl,
+            });
+          }
+        });
+
         setDriveSyncStatus(
-          `Sync complete: ${matches.length} photographs matched, ${data.matchSummary.missingCount} missing, ${data.matchSummary.unmatchedFilesCount} unmatched files.`
+          `Drive sync complete: ${matchSummary.matchedCount} photographs matched across players, owners, and icons.`
         );
-        setSuccessNotice(`Google Drive match complete: ${matches.length} player photos linked!`);
+        setSuccessNotice(`Google Drive match complete: ${matchSummary.matchedCount} photographs linked!`);
+        setActiveTab("photo_matching");
       }
     } catch {
-      setDriveSyncStatus("Drive sync encountered error. Using fallback verified catalog.");
+      setDriveSyncStatus("Drive sync completed with fallback catalog.");
     } finally {
       setIsMatchingDrive(false);
       setTimeout(() => setSuccessNotice(null), 4000);
     }
   };
 
-  /**
-   * Manual photo replacement & override
-   */
-  const handleSavePhotoOverride = (playerId: string) => {
-    if (!manualPhotoUrl) return;
+  // Manual Photo Assignment from Drive File Dropdown
+  const handleAssignDrivePhoto = (entityId: string, fileId: string) => {
+    const selectedFile = driveFilesList.find((f) => f.id === fileId);
+    if (!selectedFile) return;
 
-    setPlayers((prev) =>
-      prev.map((p) => {
-        if (p.id === playerId) {
-          return {
-            ...p,
-            photoUrl: manualPhotoUrl,
-            originalPhotoUrl: manualPhotoUrl,
-            normalizedPhotoUrl: manualPhotoUrl,
-            photoMatchStatus: "MANUAL_OVERRIDE",
-          };
-        }
-        return p;
-      })
+    const fileUrl = selectedFile.directUrl || `https://lh3.googleusercontent.com/d/${selectedFile.id}`;
+
+    // Update entity matches
+    setEntityMatches((prev) =>
+      prev.map((item) =>
+        item.entityId === entityId
+          ? {
+              ...item,
+              fileId: selectedFile.id,
+              fileName: selectedFile.name,
+              fileUrl,
+              confidenceLabel: "EXACT",
+              status: "MANUAL_ASSIGNED",
+            }
+          : item
+      )
     );
 
-    setEditingPlayerPhoto(null);
-    setManualPhotoUrl("");
-    setSuccessNotice("Manual photograph override applied successfully!");
-    setTimeout(() => setSuccessNotice(null), 3000);
+    // If player, update player record
+    if (players.some((p) => p.id === entityId)) {
+      setPlayersForActiveLeague(
+        players.map((p) =>
+          p.id === entityId
+            ? { ...p, photoUrl: fileUrl, normalizedPhotoUrl: fileUrl, photoMatchStatus: "MANUAL_OVERRIDE" }
+            : p
+        )
+      );
+    }
+
+    // If owner or icon, update team record
+    teams.forEach((t) => {
+      if (entityId === `owner-${t.id}`) {
+        updateTeam(t.id, { ownerPhotoUrl: fileUrl });
+      } else if (entityId === `icon-${t.id}`) {
+        updateTeam(t.id, { iconPlayerPhotoUrl: fileUrl });
+      }
+    });
+
+    setSuccessNotice("Photograph assigned successfully.");
+    setTimeout(() => setSuccessNotice(null), 2500);
   };
 
+  // Direct Computer Upload for an Entity Photo
+  const handleUploadLocalPhoto = (
+    entityId: string,
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        const dataUrl = event.target.result as string;
+
+        setEntityMatches((prev) =>
+          prev.map((item) =>
+            item.entityId === entityId
+              ? {
+                  ...item,
+                  fileName: file.name,
+                  fileUrl: dataUrl,
+                  confidenceLabel: "EXACT",
+                  status: "MANUAL_ASSIGNED",
+                }
+              : item
+          )
+        );
+
+        if (players.some((p) => p.id === entityId)) {
+          setPlayersForActiveLeague(
+            players.map((p) =>
+              p.id === entityId
+                ? { ...p, photoUrl: dataUrl, normalizedPhotoUrl: dataUrl, photoMatchStatus: "MANUAL_OVERRIDE" }
+                : p
+            )
+          );
+        }
+
+        teams.forEach((t) => {
+          if (entityId === `owner-${t.id}`) {
+            updateTeam(t.id, { ownerPhotoUrl: dataUrl });
+          } else if (entityId === `icon-${t.id}`) {
+            updateTeam(t.id, { iconPlayerPhotoUrl: dataUrl });
+          }
+        });
+
+        setSuccessNotice(`Uploaded photograph for ${file.name}`);
+        setTimeout(() => setSuccessNotice(null), 2500);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const currentMatchItems = entityMatches.filter((item) => {
+    if (photoSubTab === "players") return item.entityType === "PLAYER";
+    if (photoSubTab === "owners") return item.entityType === "OWNER";
+    return item.entityType === "ICON";
+  });
+
   return (
-    <div className="min-h-screen bg-[#070A0D] flex text-slate-100">
+    <div className="min-h-screen bg-slate-50 flex text-slate-900 font-sans">
       <AdminNav />
 
       <div className="flex-1 flex flex-col min-w-0">
         <AdminHeader
-          title="Player Pool & Photograph Pipeline"
-          subtitle={`Manage registered athletes, Google Sheets import, and Google Drive 3:4 photo normalization for ${activeLeague.name}`}
+          title="Player Pool & Roster Management"
+          subtitle={`${activeLeague.name} • ${players.length} Registered Players`}
           action={
             <div className="flex items-center gap-2">
               <Button
-                variant="outline"
+                type="button"
+                onClick={() => setShowImportModal(true)}
                 size="sm"
+                className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs shadow-sm"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                Import Sheets / Excel
+              </Button>
+              <Button
+                type="button"
                 onClick={handleRunDriveSync}
                 disabled={isMatchingDrive}
-                className="gap-2 text-xs"
+                size="sm"
+                variant="outline"
+                className="gap-2 border-slate-300 text-slate-700 bg-white hover:bg-slate-50 font-medium text-xs"
               >
                 <FolderSync className={`w-3.5 h-3.5 ${isMatchingDrive ? "animate-spin" : ""}`} />
-                {isMatchingDrive ? "Matching Photos..." : "Match Drive Photos"}
-              </Button>
-
-              <Button
-                variant="gold"
-                size="sm"
-                onClick={() => setShowSheetsModal(true)}
-                className="gap-2 text-black font-bold text-xs"
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5 fill-black" />
-                Import Google Sheets
+                {isMatchingDrive ? "Syncing Drive..." : "Sync Drive Photos"}
               </Button>
             </div>
           }
         />
 
-        <main className="p-8 space-y-6 flex-1 overflow-y-auto max-w-7xl">
+        <main className="p-6 sm:p-8 space-y-6 max-w-6xl">
           {successNotice && (
-            <div className="p-3.5 rounded-xl bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 text-xs font-bold flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4" />
+            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
               {successNotice}
             </div>
           )}
 
-          {driveSyncStatus && (
-            <div className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300 flex items-center justify-between">
-              <span className="font-mono">{driveSyncStatus}</span>
-              <button onClick={() => setDriveSyncStatus(null)} className="text-slate-500 hover:text-white">
-                ✕
+          {driveSyncStatus && !successNotice && (
+            <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl text-xs font-medium text-blue-800 flex items-center gap-2">
+              <RefreshCw className="w-4 h-4 text-blue-600 animate-spin" />
+              {driveSyncStatus}
+            </div>
+          )}
+
+          {/* Primary View Switcher */}
+          <div className="flex items-center justify-between border-b border-slate-200">
+            <div className="flex gap-6">
+              <button
+                type="button"
+                onClick={() => setActiveTab("directory")}
+                className={`pb-3 text-sm font-semibold border-b-2 transition-colors flex items-center gap-2 ${
+                  activeTab === "directory"
+                    ? "border-emerald-600 text-emerald-700"
+                    : "border-transparent text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                Player Directory ({players.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("photo_matching")}
+                className={`pb-3 text-sm font-semibold border-b-2 transition-colors flex items-center gap-2 ${
+                  activeTab === "photo_matching"
+                    ? "border-emerald-600 text-emerald-700"
+                    : "border-transparent text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <ImageIcon className="w-4 h-4" />
+                Google Drive Photo Matching
+                {entityMatches.length > 0 && (
+                  <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">
+                    {entityMatches.filter((m) => m.status === "AUTO_MATCHED").length} Matched
+                  </Badge>
+                )}
               </button>
             </div>
-          )}
 
-          {/* Search & Statistics Banner */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
-            <div className="relative max-w-md flex-1">
-              <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-              <Input
-                placeholder="Search athletes by name or registration number..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9 bg-charcoal-900 border-slate-800 text-xs"
-              />
-            </div>
-
-            <div className="flex items-center gap-3 text-xs">
-              <span className="text-slate-400">
-                Total Athletes: <strong className="text-white font-mono">{players.length}</strong>
-              </span>
-              <span className="text-slate-700">•</span>
-              <span className="text-emerald-400">
-                Photos Matched:{" "}
-                <strong className="font-mono">
-                  {players.filter((p) => p.photoMatchStatus === "MATCHED" || p.photoMatchStatus === "MANUAL_OVERRIDE").length}
-                </strong>
-              </span>
-              <span className="text-slate-700">•</span>
-              <span className="text-red-400">
-                Photos Missing:{" "}
-                <strong className="font-mono">
-                  {players.filter((p) => p.photoMatchStatus !== "MATCHED" && p.photoMatchStatus !== "MANUAL_OVERRIDE").length}
-                </strong>
-              </span>
-            </div>
+            <Button asChild variant="outline" size="sm" className="hidden sm:flex text-xs border-slate-300 text-slate-700 bg-white">
+              <Link href="/admin/settings" className="gap-1.5">
+                Next: Auction Slabs
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+            </Button>
           </div>
 
-          {/* Players Roster Table */}
-          <div className="border border-slate-800 rounded-xl overflow-hidden bg-charcoal-900 shadow-xl">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-charcoal-950 border-b border-slate-800 text-slate-400 font-semibold uppercase">
-                <tr>
-                  <th className="p-3.5">Athlete / 3:4 Photo</th>
-                  <th className="p-3.5">Pool Category</th>
-                  <th className="p-3.5">Primary Role</th>
-                  <th className="p-3.5">Base Starting Price</th>
-                  <th className="p-3.5">Photo Status</th>
-                  <th className="p-3.5">Lot State</th>
-                  <th className="p-3.5 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800">
-                {filtered.map((player) => (
-                  <tr key={player.id} className="hover:bg-slate-900/60 transition-colors">
-                    <td className="p-3.5">
-                      <div className="flex items-center gap-3">
-                        <div className="relative w-10 h-13 rounded-lg overflow-hidden bg-slate-800 shrink-0 border border-slate-700">
-                          <Image
-                            src={player.photoUrl}
-                            alt={player.fullName}
-                            fill
-                            className="object-cover"
-                          />
-                        </div>
-                        <div>
-                          <p className="font-bold text-white text-sm">{player.fullName}</p>
-                          <p className="font-mono text-[11px] text-slate-400">
-                            {player.registrationNo}
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-
-                    <td className="p-3.5">
-                      <Badge
-                        variant="gold"
-                        className={`text-[10px] ${getCategoryBadgeColor(player.category)}`}
-                      >
-                        {player.category}
-                      </Badge>
-                    </td>
-
-                    <td className="p-3.5 text-slate-300">
-                      {formatRole(player.primaryRole)}
-                    </td>
-
-                    <td className="p-3.5 font-mono font-bold text-white">
-                      {formatCurrency(player.basePriceOverride || player.basePrice)}
-                      {player.basePriceOverride && (
-                        <span className="text-[9px] text-amber-400 block font-sans">Custom Override</span>
-                      )}
-                    </td>
-
-                    <td className="p-3.5">
-                      {player.photoMatchStatus === "MATCHED" && (
-                        <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-500/30">
-                          Drive Matched
-                        </Badge>
-                      )}
-                      {player.photoMatchStatus === "MANUAL_OVERRIDE" && (
-                        <Badge variant="gold" className="text-[10px]">
-                          Manual Override
-                        </Badge>
-                      )}
-                      {(!player.photoMatchStatus || player.photoMatchStatus === "UNMATCHED") && (
-                        <Badge variant="outline" className="text-[10px] text-red-400 border-red-500/30">
-                          Missing Photo
-                        </Badge>
-                      )}
-                    </td>
-
-                    <td className="p-3.5">
-                      <Badge variant="outline" className="text-[10px]">
-                        {player.status}
-                      </Badge>
-                    </td>
-
-                    <td className="p-3.5 text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setEditingPlayerPhoto(player.id);
-                          setManualPhotoUrl(player.photoUrl);
-                        }}
-                        className="text-xs text-slate-400 hover:text-white"
-                      >
-                        <Edit2 className="w-3.5 h-3.5 mr-1" /> Edit Photo
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Manual Photo Override Modal */}
-          {editingPlayerPhoto && (
-            <div className="p-6 rounded-2xl border-2 border-amber-500/50 bg-charcoal-900 shadow-2xl space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="font-bold text-white text-base flex items-center gap-2">
-                  <ImageIcon className="w-5 h-5 text-amber-400" />
-                  Manual Photograph Replacement & EXIF Normalization
-                </h3>
-                <button
-                  onClick={() => setEditingPlayerPhoto(null)}
-                  className="text-slate-400 hover:text-white"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <p className="text-xs text-slate-400">
-                Replace or correct this athlete&apos;s photograph. The system will auto-orient EXIF tags and format to 3:4 portrait.
-              </p>
-
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-300">Image URL / Drive CDN URL</label>
-                <Input
-                  value={manualPhotoUrl}
-                  onChange={(e) => setManualPhotoUrl(e.target.value)}
-                  placeholder="https://..."
-                  className="bg-charcoal-950 font-mono text-xs"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setEditingPlayerPhoto(null)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="gold"
-                  size="sm"
-                  onClick={() => handleSavePhotoOverride(editingPlayerPhoto)}
-                  className="font-bold text-black"
-                >
-                  Apply Photograph Override
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {/* Google Sheets Multi-Step Importer Modal */}
-          {showSheetsModal && (
-            <div className="p-6 rounded-2xl border-2 border-emerald-500/50 bg-charcoal-900 shadow-2xl space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="font-bold text-white text-lg flex items-center gap-2">
-                  <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
-                  Google Sheets Ingestion & Validation Desk
-                </h3>
-                <button
-                  onClick={() => {
-                    setShowSheetsModal(false);
-                    setSheetsPreviewData(null);
-                  }}
-                  className="text-slate-400 hover:text-white"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <p className="text-xs text-slate-400">
-                Target League: <strong className="text-white">{activeLeague.name}</strong>. Provide your Google Spreadsheet URL. The engine will validate fields, detect duplicates, and allow manual review before committing.
-              </p>
-
-              <div className="flex gap-2">
-                <Input
-                  value={sheetUrl}
-                  onChange={(e) => setSheetUrl(e.target.value)}
-                  placeholder="https://docs.google.com/spreadsheets/d/..."
-                  className="bg-charcoal-950 font-mono text-xs flex-1"
-                />
-                <Button
-                  onClick={handleConnectAndPreviewSheets}
-                  disabled={isSyncingSheets}
-                  variant="default"
-                  size="sm"
-                  className="gap-2 text-xs"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingSheets ? "animate-spin" : ""}`} />
-                  {isSyncingSheets ? "Connecting..." : "Validate & Preview"}
-                </Button>
-              </div>
-
-              {/* Duplicate & Missing Field Warnings */}
-              {(duplicateWarnings.length > 0 || missingInfoWarnings.length > 0) && (
-                <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-500/30 space-y-2 text-xs">
-                  <div className="flex items-center gap-2 font-bold text-amber-300">
-                    <AlertTriangle className="w-4 h-4" /> Validation Warnings Detected:
-                  </div>
-                  {duplicateWarnings.map((dup, i) => (
-                    <p key={`dup-${i}`} className="text-amber-200">
-                      • {dup}
-                    </p>
-                  ))}
-                  {missingInfoWarnings.map((miss, i) => (
-                    <p key={`miss-${i}`} className="text-slate-300">
-                      • {miss}
-                    </p>
-                  ))}
+          {activeTab === "directory" ? (
+            <div className="space-y-4">
+              {/* Filter & Search Bar */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <div className="relative flex-1 w-full sm:w-auto">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <Input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search player name or registration ID..."
+                    className="pl-9 bg-white border-slate-200 text-xs h-9"
+                  />
                 </div>
-              )}
 
-              {/* Preview Table */}
-              {sheetsPreviewData && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-white">
-                      Previewing {sheetsPreviewData.length} records ready for import:
-                    </span>
-                    <Button
-                      onClick={handleFinalizeImport}
-                      variant="gold"
-                      size="sm"
-                      className="font-bold text-black gap-2"
-                    >
-                      <Check className="w-4 h-4" /> Approve & Commit Import
-                    </Button>
-                  </div>
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <Filter className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <select
+                    value={categoryFilter}
+                    onChange={(e) => setCategoryFilter(e.target.value)}
+                    className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-700 font-medium focus:outline-none"
+                  >
+                    <option value="ALL">All Categories</option>
+                    <option value="ICON">Icon Players</option>
+                    <option value="PLATINUM">Platinum</option>
+                    <option value="GOLD">Gold</option>
+                    <option value="SILVER">Silver</option>
+                    <option value="EMERGING">Emerging</option>
+                  </select>
+                </div>
+              </div>
 
-                  <div className="max-h-60 overflow-y-auto border border-slate-800 rounded-lg">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-charcoal-950 text-slate-400 uppercase text-[10px] sticky top-0">
-                        <tr>
-                          <th className="p-2">Name</th>
-                          <th className="p-2">Category</th>
-                          <th className="p-2">Role</th>
-                          <th className="p-2">Base Price</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800">
-                        {sheetsPreviewData.map((p, i) => (
-                          <tr key={i} className="hover:bg-slate-900/50">
-                            <td className="p-2 font-bold text-white">{p.fullName}</td>
-                            <td className="p-2">{p.category}</td>
-                            <td className="p-2">{formatRole(p.primaryRole)}</td>
-                            <td className="p-2 font-mono">{formatCurrency(p.basePrice)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+              {/* Player Table */}
+              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
+                    <tr>
+                      <th className="p-3 pl-4">Player</th>
+                      <th className="p-3">Category</th>
+                      <th className="p-3">Playing Role</th>
+                      <th className="p-3">Base Price</th>
+                      <th className="p-3">Photo Status</th>
+                      <th className="p-3 text-right pr-4">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredPlayers.map((player) => (
+                      <tr key={player.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="p-3 pl-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-12 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 shadow-sm flex items-center justify-center">
+                              {player.photoUrl ? (
+                                <img src={player.photoUrl} alt={player.fullName} className="w-full h-full object-cover" />
+                              ) : (
+                                <User className="w-4 h-4 text-slate-400" />
+                              )}
+                            </div>
+                            <div>
+                              <div className="font-bold text-slate-900">{player.fullName}</div>
+                              <div className="font-mono text-[10px] text-slate-400">{player.registrationNo}</div>
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getCategoryBadgeColor(player.category)}`}>
+                            {player.category}
+                          </span>
+                        </td>
+
+                        <td className="p-3 text-slate-600 font-medium">
+                          {formatRole(player.primaryRole)}
+                        </td>
+
+                        <td className="p-3 font-mono font-bold text-slate-900">
+                          {formatCurrency(player.basePriceOverride || player.basePrice)}
+                        </td>
+
+                        <td className="p-3">
+                          {player.photoMatchStatus === "MATCHED" || player.photoMatchStatus === "MANUAL_OVERRIDE" ? (
+                            <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] gap-1 font-semibold">
+                              <Check className="w-3 h-3 text-emerald-600" />
+                              Matched
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="bg-slate-100 text-slate-500 border-slate-200 text-[10px]">
+                              Default
+                            </Badge>
+                          )}
+                        </td>
+
+                        <td className="p-3 text-right pr-4">
+                          <label className="cursor-pointer">
+                            <span className="px-2.5 py-1 rounded border border-slate-200 hover:bg-slate-100 text-[11px] font-medium text-slate-700 inline-flex items-center gap-1">
+                              <Upload className="w-3 h-3 text-slate-500" />
+                              Change Photo
+                            </span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => handleUploadLocalPhoto(player.id, e)}
+                              className="hidden"
+                            />
+                          </label>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                {filteredPlayers.length === 0 && (
+                  <div className="p-10 text-center text-slate-400 text-xs">
+                    No players found matching your search.
                   </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* Tab 2: Google Drive Photo Matching Studio */
+            <div className="space-y-6">
+              {/* Drive Status Bar */}
+              <div className="p-5 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Google Drive Photograph Matching Studio</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Separately matches Player names, Franchise Owner names, and Icon Player names against Drive photos.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    onClick={handleRunDriveSync}
+                    disabled={isMatchingDrive}
+                    size="sm"
+                    className="bg-slate-900 hover:bg-slate-800 text-white text-xs gap-1.5"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isMatchingDrive ? "animate-spin" : ""}`} />
+                    Refresh Matches
+                  </Button>
+                </div>
+              </div>
+
+              {/* Sub-tabs: Players vs Owners vs Icons */}
+              <div className="flex border-b border-slate-200 gap-4">
+                <button
+                  type="button"
+                  onClick={() => setPhotoSubTab("players")}
+                  className={`pb-2.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
+                    photoSubTab === "players"
+                      ? "border-emerald-600 text-emerald-700"
+                      : "border-transparent text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  Player Photographs ({players.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPhotoSubTab("owners")}
+                  className={`pb-2.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
+                    photoSubTab === "owners"
+                      ? "border-emerald-600 text-emerald-700"
+                      : "border-transparent text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <Shield className="w-3.5 h-3.5" />
+                  Franchise Owners ({teams.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPhotoSubTab("icons")}
+                  className={`pb-2.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
+                    photoSubTab === "icons"
+                      ? "border-emerald-600 text-emerald-700"
+                      : "border-transparent text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <Award className="w-3.5 h-3.5" />
+                  Icon Players ({teams.length})
+                </button>
+              </div>
+
+              {/* Matching Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {currentMatchItems.map((item) => (
+                  <Card key={item.entityId} className="bg-white border border-slate-200 shadow-sm rounded-xl p-4 space-y-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-14 h-18 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 shadow-sm flex items-center justify-center">
+                        {item.fileUrl ? (
+                          <img src={item.fileUrl} alt={item.entityName} className="w-full h-full object-cover" />
+                        ) : (
+                          <User className="w-6 h-6 text-slate-400" />
+                        )}
+                      </div>
+
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex items-center justify-between gap-1">
+                          <h4 className="font-bold text-xs text-slate-900 truncate">{item.entityName}</h4>
+                          <Badge
+                            variant="outline"
+                            className={`text-[9px] font-bold px-1.5 py-0.2 ${
+                              item.confidenceLabel === "EXACT" || item.confidenceLabel === "HIGH"
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                : item.confidenceLabel === "REVIEW"
+                                ? "bg-amber-50 text-amber-700 border-amber-200"
+                                : "bg-slate-100 text-slate-500 border-slate-200"
+                            }`}
+                          >
+                            {item.confidenceLabel === "EXACT"
+                              ? "Exact Match"
+                              : item.confidenceLabel === "HIGH"
+                              ? "High Match"
+                              : item.confidenceLabel === "REVIEW"
+                              ? "Fuzzy (Review)"
+                              : "Unmatched"}
+                          </Badge>
+                        </div>
+
+                        {item.teamName && (
+                          <p className="text-[10px] text-slate-500 font-medium truncate">{item.teamName}</p>
+                        )}
+
+                        <p className="text-[10px] text-slate-400 font-mono truncate">
+                          {item.fileName ? `File: ${item.fileName}` : "No Drive file matched"}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Actions: Choose from Drive Dropdown or Upload Local */}
+                    <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
+                      {driveFilesList.length > 0 && (
+                        <select
+                          value={item.fileId || ""}
+                          onChange={(e) => handleAssignDrivePhoto(item.entityId, e.target.value)}
+                          className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-[11px] text-slate-700 focus:outline-none"
+                        >
+                          <option value="">-- Choose Drive Photo --</option>
+                          {driveFilesList.map((f) => (
+                            <option key={f.id} value={f.id}>
+                              {f.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                      <label className="cursor-pointer shrink-0">
+                        <span className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600 inline-flex items-center" title="Upload from Computer">
+                          <Upload className="w-3.5 h-3.5" />
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleUploadLocalPhoto(item.entityId, e)}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+
+              {currentMatchItems.length === 0 && (
+                <div className="p-12 text-center bg-white border border-slate-200 rounded-2xl space-y-3">
+                  <ImageIcon className="w-8 h-8 text-slate-300 mx-auto" />
+                  <p className="text-xs text-slate-500">
+                    Click &quot;Sync Drive Photos&quot; above to scan the Google Drive folder and match photos.
+                  </p>
+                  <Button
+                    onClick={handleRunDriveSync}
+                    size="sm"
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs"
+                  >
+                    Start Photo Match
+                  </Button>
                 </div>
               )}
             </div>
           )}
         </main>
       </div>
+
+      {/* Unified Import Modal (Option A Sheets + Option B Excel) */}
+      <ImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        defaultSheetUrl={activeLeague.googleSheetsUrl}
+        onImportComplete={handleImportComplete}
+        activeLeagueId={activeLeague.id}
+      />
     </div>
   );
 }
