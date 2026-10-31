@@ -1,0 +1,205 @@
+import Link from "next/link";
+import { PublicNav } from "@/components/public/public-nav";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { formatCurrency } from "@/lib/utils";
+import { MOCK_TEAMS } from "@/lib/mock-data/teams";
+import { MOCK_PLAYERS } from "@/lib/mock-data/players";
+import {
+  Tv,
+  Users,
+  ArrowRight,
+  Sparkles,
+  Sliders,
+} from "lucide-react";
+
+export default function HomePage() {
+  const totalPurseAllocated = MOCK_TEAMS.reduce((acc, t) => acc + t.purse.totalBudget, 0);
+  const totalPurseSpent = MOCK_TEAMS.reduce((acc, t) => acc + t.purse.spentAmount, 0);
+  const soldPlayers = MOCK_PLAYERS.filter((p) => p.status === "SOLD").length;
+
+  return (
+    <div className="min-h-screen bg-[#090D10] text-slate-100 flex flex-col">
+      <PublicNav />
+
+      {/* Hero Section */}
+      <main className="flex-1">
+        <section className="relative overflow-hidden py-16 lg:py-24 border-b border-slate-800 stage-gradient">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+            <div className="text-center max-w-3xl mx-auto space-y-6">
+              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold tracking-wider uppercase">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                Nalanda Turf League • Official Auction Portal
+              </div>
+
+              <h1 className="text-4xl sm:text-6xl font-black tracking-tight text-white uppercase leading-none">
+                NTL Season 1 <br />
+                <span className="bg-gradient-to-r from-amber-400 via-amber-200 to-yellow-500 bg-clip-text text-transparent">
+                  Player Auction
+                </span>
+              </h1>
+
+              <p className="text-base sm:text-lg text-slate-300 font-normal leading-relaxed">
+                6 Franchises. 120+ Registered Athletes. Multi-Crore Purse Battles. Witness the live bidding wars, squad acquisitions, and dynamic purse fluctuations in real-time.
+              </p>
+
+              <div className="flex flex-wrap items-center justify-center gap-4 pt-4">
+                <Button asChild size="lg" variant="gold" className="gap-2 shadow-amber-500/20">
+                  <Link href="/live">
+                    <Tv className="w-5 h-5 text-black" />
+                    Enter Live Stage Screen
+                  </Link>
+                </Button>
+                <Button asChild size="lg" variant="outline" className="gap-2">
+                  <Link href="/teams">
+                    <Users className="w-5 h-5 text-emerald-400" />
+                    View Team Purses
+                  </Link>
+                </Button>
+                <Button asChild size="lg" variant="ghost" className="gap-2 text-slate-300">
+                  <Link href="/admin/dashboard">
+                    <Sliders className="w-4 h-4 text-slate-400" />
+                    Admin Operations
+                  </Link>
+                </Button>
+              </div>
+            </div>
+
+            {/* Quick Metrics Banner */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-16 max-w-5xl mx-auto">
+              <Card className="border-slate-800 bg-charcoal-900/60">
+                <CardContent className="p-5 text-center">
+                  <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">
+                    Total Purse Pool
+                  </p>
+                  <p className="text-2xl font-black text-amber-400 font-mono mt-1">
+                    {formatCurrency(totalPurseAllocated, true)}
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-1">₹50L per team</p>
+                </CardContent>
+              </Card>
+
+              <Card className="border-slate-800 bg-charcoal-900/60">
+                <CardContent className="p-5 text-center">
+                  <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">
+                    Purse Spent So Far
+                  </p>
+                  <p className="text-2xl font-black text-emerald-400 font-mono mt-1">
+                    {formatCurrency(totalPurseSpent, true)}
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-1">Across 6 Franchises</p>
+                </CardContent>
+              </Card>
+
+              <Card className="border-slate-800 bg-charcoal-900/60">
+                <CardContent className="p-5 text-center">
+                  <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">
+                    Lots Hammered
+                  </p>
+                  <p className="text-2xl font-black text-white font-mono mt-1">
+                    {soldPlayers} Players
+                  </p>
+                  <p className="text-[11px] text-emerald-400 mt-1 font-semibold">Active Round 1</p>
+                </CardContent>
+              </Card>
+
+              <Card className="border-slate-800 bg-charcoal-900/60">
+                <CardContent className="p-5 text-center">
+                  <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">
+                    Competing Teams
+                  </p>
+                  <p className="text-2xl font-black text-white font-mono mt-1">
+                    6 Franchises
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-1">Nalanda District</p>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </section>
+
+        {/* Franchises Spotlight Grid */}
+        <section className="py-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <h2 className="text-2xl font-black uppercase text-white tracking-wide">
+                Competing Franchises
+              </h2>
+              <p className="text-sm text-slate-400 mt-1">
+                Official teams registered for Nalanda Turf League Season 1
+              </p>
+            </div>
+            <Button asChild variant="outline" size="sm" className="gap-2">
+              <Link href="/teams">
+                All Squads <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {MOCK_TEAMS.map((team) => (
+              <Card
+                key={team.id}
+                className="border-slate-800 bg-charcoal-900/80 hover:border-emerald-500/40 transition-all hover:-translate-y-1"
+              >
+                <CardContent className="p-6 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-xl bg-slate-800 flex items-center justify-center font-bold text-amber-400 text-lg border border-slate-700">
+                        {team.shortCode}
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-white text-base">{team.name}</h3>
+                        <p className="text-xs text-slate-400">Owner: {team.ownerName}</p>
+                      </div>
+                    </div>
+                    <Badge variant="outline" className="font-mono text-xs">
+                      {team.squadCount} / 18
+                    </Badge>
+                  </div>
+
+                  <div className="space-y-1.5 pt-2 border-t border-slate-800/80">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-400">Remaining Budget</span>
+                      <span className="font-mono font-bold text-emerald-400">
+                        {formatCurrency(team.purse.remainingAmount)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-400">Spent Amount</span>
+                      <span className="font-mono text-slate-300">
+                        {formatCurrency(team.purse.spentAmount)}
+                      </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
+      </main>
+
+      {/* Footer */}
+      <footer className="border-t border-slate-800 bg-charcoal-950 py-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
+          <p>© 2026 Nalanda Turf League (NTL). All rights reserved.</p>
+          <div className="flex items-center gap-6">
+            <Link href="/live" className="hover:text-emerald-400 transition-colors">
+              Live Stage
+            </Link>
+            <Link href="/teams" className="hover:text-emerald-400 transition-colors">
+              Franchises
+            </Link>
+            <Link href="/results" className="hover:text-emerald-400 transition-colors">
+              Results
+            </Link>
+            <Link href="/admin/login" className="hover:text-amber-400 transition-colors">
+              Admin Portal
+            </Link>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}
