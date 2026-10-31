@@ -28,6 +28,7 @@
     "next": "^15.2.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "sharp": "^0.35.5",
     "tailwind-merge": "^3.0.2",
     "zod": "^3.24.2"
   },
@@ -36,11 +37,11 @@
     "@types/node": "^22.13.9",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
+    "autoprefixer": "^10.4.20",
     "eslint": "^9.21.0",
     "eslint-config-next": "^15.2.1",
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
-    "autoprefixer": "^10.4.20",
     "typescript": "^5.8.2"
   }
 }

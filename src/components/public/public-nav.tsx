@@ -4,9 +4,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Tv, Users, Trophy, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useLeague } from "@/lib/context/league-context";
 
 export function PublicNav() {
   const pathname = usePathname();
+  const { activeLeague } = useLeague();
 
   const links = [
     { label: "Live Stage", href: "/live", icon: Tv, live: true },
@@ -19,19 +21,21 @@ export function PublicNav() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         {/* League Logo & Brand */}
         <Link href="/" className="flex items-center gap-3 group">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center font-black text-white text-xl shadow-lg shadow-emerald-950/80 group-hover:scale-105 transition-transform">
-            NTL
+          <div
+            className="w-10 h-10 rounded-xl flex items-center justify-center font-black text-white text-xl shadow-lg group-hover:scale-105 transition-transform border border-white/20"
+            style={{ backgroundColor: activeLeague.primaryColor }}
+          >
+            {activeLeague.name.charAt(0)}
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-black text-white text-base tracking-wider">
-                NALANDA TURF LEAGUE
-              </span>
-              <span className="px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 text-[10px] font-bold rounded border border-emerald-500/30">
-                S1
+              <span className="font-black text-white text-base tracking-wider uppercase">
+                {activeLeague.name}
               </span>
             </div>
-            <p className="text-[11px] text-slate-400 font-medium">Official Auction Portal</p>
+            <p className="text-[11px] text-slate-400 font-medium">
+              {activeLeague.matchVenue || "Official Auction Portal"}
+            </p>
           </div>
         </Link>
 
@@ -70,7 +74,7 @@ export function PublicNav() {
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-amber-300 border border-slate-800 hover:border-amber-500/30 hover:bg-amber-500/5 transition-colors"
         >
           <Lock className="w-3.5 h-3.5" />
-          <span>Admin Login</span>
+          <span>Admin Desk</span>
         </Link>
       </div>
     </header>

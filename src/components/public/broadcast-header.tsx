@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Maximize2, Minimize2, ArrowLeft } from "lucide-react";
+import { useLeague } from "@/lib/context/league-context";
 
 export function BroadcastHeader() {
   const [currentTime, setCurrentTime] = useState<string>("");
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const { activeLeague } = useLeague();
 
   useEffect(() => {
     const updateTime = () => {
@@ -49,16 +51,19 @@ export function BroadcastHeader() {
           <ArrowLeft className="w-4 h-4" />
         </Link>
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-emerald-600 flex items-center justify-center font-black text-white text-base shadow-lg shadow-emerald-900/60">
-            NTL
+          <div
+            className="w-9 h-9 rounded-lg flex items-center justify-center font-black text-white text-base shadow-lg border border-white/20"
+            style={{ backgroundColor: activeLeague.primaryColor }}
+          >
+            {activeLeague.name.charAt(0)}
           </div>
           <div>
             <h1 className="text-white font-black text-sm lg:text-base tracking-wider uppercase flex items-center gap-2">
-              Nalanda Turf League
-              <span className="text-amber-400 font-extrabold">Season 1</span>
+              {activeLeague.name}
+              <span className="text-amber-400 font-extrabold">LIVE</span>
             </h1>
             <p className="text-[10px] text-emerald-400 font-semibold tracking-widest uppercase">
-              Official Auction Broadcast
+              {activeLeague.matchVenue || "Official Stage Broadcast"}
             </p>
           </div>
         </div>
@@ -71,7 +76,7 @@ export function BroadcastHeader() {
           <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
         </span>
         <span className="text-xs font-black tracking-widest text-red-300 uppercase">
-          LIVE ON STAGE
+          STAGE BROADCAST
         </span>
       </div>
 
@@ -82,7 +87,7 @@ export function BroadcastHeader() {
             {currentTime}
           </div>
           <div className="text-[10px] text-slate-500 uppercase tracking-widest">
-            IST (GMT+5:30)
+            {activeLeague.timezone || "IST (GMT+5:30)"}
           </div>
         </div>
 

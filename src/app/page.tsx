@@ -1,9 +1,12 @@
+"use client";
+
 import Link from "next/link";
 import { PublicNav } from "@/components/public/public-nav";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
+import { useLeague } from "@/lib/context/league-context";
 import { MOCK_TEAMS } from "@/lib/mock-data/teams";
 import { MOCK_PLAYERS } from "@/lib/mock-data/players";
 import {
@@ -12,9 +15,13 @@ import {
   ArrowRight,
   Sparkles,
   Sliders,
+  MapPin,
+  Calendar,
 } from "lucide-react";
 
 export default function HomePage() {
+  const { activeLeague } = useLeague();
+
   const totalPurseAllocated = MOCK_TEAMS.reduce((acc, t) => acc + t.purse.totalBudget, 0);
   const totalPurseSpent = MOCK_TEAMS.reduce((acc, t) => acc + t.purse.spentAmount, 0);
   const soldPlayers = MOCK_PLAYERS.filter((p) => p.status === "SOLD").length;
@@ -30,22 +37,33 @@ export default function HomePage() {
             <div className="text-center max-w-3xl mx-auto space-y-6">
               <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold tracking-wider uppercase">
                 <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                Nalanda Turf League • Official Auction Portal
+                {activeLeague.name} • Official Auction Portal
               </div>
 
               <h1 className="text-4xl sm:text-6xl font-black tracking-tight text-white uppercase leading-none">
-                NTL Season 1 <br />
+                {activeLeague.name} <br />
                 <span className="bg-gradient-to-r from-amber-400 via-amber-200 to-yellow-500 bg-clip-text text-transparent">
                   Player Auction
                 </span>
               </h1>
 
               <p className="text-base sm:text-lg text-slate-300 font-normal leading-relaxed">
-                6 Franchises. 120+ Registered Athletes. Multi-Crore Purse Battles. Witness the live bidding wars, squad acquisitions, and dynamic purse fluctuations in real-time.
+                {activeLeague.description ||
+                  "6 Franchises. 120+ Registered Athletes. Multi-Crore Purse Battles. Witness the live bidding wars, squad acquisitions, and dynamic purse fluctuations in real-time."}
               </p>
 
+              <div className="flex items-center justify-center gap-4 text-xs text-slate-400">
+                <span className="flex items-center gap-1.5">
+                  <MapPin className="w-4 h-4 text-emerald-400" /> {activeLeague.matchVenue}
+                </span>
+                <span className="text-slate-600">•</span>
+                <span className="flex items-center gap-1.5">
+                  <Calendar className="w-4 h-4 text-amber-400" /> Auction: {activeLeague.auctionDate} @ {activeLeague.auctionTime}
+                </span>
+              </div>
+
               <div className="flex flex-wrap items-center justify-center gap-4 pt-4">
-                <Button asChild size="lg" variant="gold" className="gap-2 shadow-amber-500/20">
+                <Button asChild size="lg" variant="gold" className="gap-2 shadow-amber-500/20 text-black font-bold">
                   <Link href="/live">
                     <Tv className="w-5 h-5 text-black" />
                     Enter Live Stage Screen
@@ -76,7 +94,7 @@ export default function HomePage() {
                   <p className="text-2xl font-black text-amber-400 font-mono mt-1">
                     {formatCurrency(totalPurseAllocated, true)}
                   </p>
-                  <p className="text-[11px] text-slate-500 mt-1">₹50L per team</p>
+                  <p className="text-[11px] text-slate-500 mt-1">Allocated across teams</p>
                 </CardContent>
               </Card>
 
@@ -100,7 +118,7 @@ export default function HomePage() {
                   <p className="text-2xl font-black text-white font-mono mt-1">
                     {soldPlayers} Players
                   </p>
-                  <p className="text-[11px] text-emerald-400 mt-1 font-semibold">Active Round 1</p>
+                  <p className="text-[11px] text-emerald-400 mt-1 font-semibold">Active Round</p>
                 </CardContent>
               </Card>
 
@@ -110,9 +128,9 @@ export default function HomePage() {
                     Competing Teams
                   </p>
                   <p className="text-2xl font-black text-white font-mono mt-1">
-                    6 Franchises
+                    {MOCK_TEAMS.length} Franchises
                   </p>
-                  <p className="text-[11px] text-slate-500 mt-1">Nalanda District</p>
+                  <p className="text-[11px] text-slate-500 mt-1">{activeLeague.matchVenue}</p>
                 </CardContent>
               </Card>
             </div>
@@ -127,7 +145,7 @@ export default function HomePage() {
                 Competing Franchises
               </h2>
               <p className="text-sm text-slate-400 mt-1">
-                Official teams registered for Nalanda Turf League Season 1
+                Official teams registered for {activeLeague.name}
               </p>
             </div>
             <Button asChild variant="outline" size="sm" className="gap-2">
@@ -146,7 +164,10 @@ export default function HomePage() {
                 <CardContent className="p-6 space-y-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-xl bg-slate-800 flex items-center justify-center font-bold text-amber-400 text-lg border border-slate-700">
+                      <div
+                        className="w-12 h-12 rounded-xl border border-white/20 flex items-center justify-center font-bold text-white text-lg shadow-md"
+                        style={{ backgroundColor: team.primaryColor }}
+                      >
                         {team.shortCode}
                       </div>
                       <div>
@@ -155,7 +176,7 @@ export default function HomePage() {
                       </div>
                     </div>
                     <Badge variant="outline" className="font-mono text-xs">
-                      {team.squadCount} / 18
+                      {team.squadCount} / {team.purse.maxPlayers}
                     </Badge>
                   </div>
 
@@ -183,7 +204,7 @@ export default function HomePage() {
       {/* Footer */}
       <footer className="border-t border-slate-800 bg-charcoal-950 py-8">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
-          <p>© 2026 Nalanda Turf League (NTL). All rights reserved.</p>
+          <p>© 2026 {activeLeague.name}. All rights reserved.</p>
           <div className="flex items-center gap-6">
             <Link href="/live" className="hover:text-emerald-400 transition-colors">
               Live Stage

@@ -8,9 +8,11 @@ import { Input } from "@/components/ui/input";
 import { formatCurrency, formatRole, getCategoryBadgeColor } from "@/lib/utils";
 import { MOCK_PLAYERS } from "@/lib/mock-data/players";
 import { MOCK_TEAMS } from "@/lib/mock-data/teams";
+import { useLeague } from "@/lib/context/league-context";
 import { Search, CheckCircle2, XCircle, Clock } from "lucide-react";
 
 export default function ResultsPage() {
+  const { activeLeague } = useLeague();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [categoryFilter, setCategoryFilter] = useState<string>("ALL");
@@ -38,13 +40,13 @@ export default function ResultsPage() {
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 w-full">
         <div className="mb-8">
           <Badge variant="gold" className="text-xs font-mono uppercase mb-2">
-            Auction Ledger
+            {activeLeague.name} Ledger
           </Badge>
           <h1 className="text-3xl sm:text-4xl font-black text-white uppercase tracking-tight">
             Player Results & Directory
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Real-time catalog of all registered athletes, final prices, and acquiring franchises.
+            Real-time catalog of all registered athletes and signed franchises for {activeLeague.name}.
           </p>
         </div>
 

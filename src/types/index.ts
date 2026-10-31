@@ -1,5 +1,5 @@
 // ==============================================================================
-// NTL AUCTION PLATFORM - CORE DOMAIN TYPE DEFINITIONS
+// NTL AUCTION PLATFORM - CORE DOMAIN TYPE DEFINITIONS (PHASE 2)
 // ==============================================================================
 
 export type PlayerCategory = 'ICON' | 'PLATINUM' | 'GOLD' | 'SILVER' | 'EMERGING';
@@ -8,9 +8,21 @@ export type PlayerRole = 'BATSMAN' | 'BOWLER' | 'ALL_ROUNDER' | 'WICKET_KEEPER';
 
 export type PlayerStatus = 'AVAILABLE' | 'ON_AUCTION' | 'SOLD' | 'UNSOLD' | 'WITHDRAWN';
 
+export type PhotoMatchStatus = 'MATCHED' | 'UNMATCHED' | 'MANUAL_OVERRIDE';
+
 export type AuctionStatus = 'IDLE' | 'IN_PROGRESS' | 'PAUSED' | 'FINISHED';
 
 export type AdminRole = 'SUPER_ADMIN' | 'COMMISSIONER' | 'AUCTIONEER';
+
+export interface BrandingPalette {
+  primary: string;
+  secondary: string;
+  accent: string;
+  background: string;
+  card: string;
+  border: string;
+  text: string;
+}
 
 export interface League {
   id: string;
@@ -18,8 +30,17 @@ export interface League {
   name: string;
   description?: string;
   logoUrl?: string;
+  matchDate?: string;
+  matchVenue?: string;
+  auctionDate?: string;
+  auctionTime?: string;
+  timezone?: string;
+  googleSheetsUrl?: string;
+  googleDriveFolderUrl?: string;
   primaryColor: string;
   secondaryColor: string;
+  brandingPalette?: BrandingPalette;
+  created_at?: string;
 }
 
 export interface Season {
@@ -34,6 +55,13 @@ export interface Season {
   maxPlayersPerTeam: number;
 }
 
+export interface TeamCategoryLimits {
+  max_icon?: number;
+  max_platinum?: number;
+  min_emerging?: number;
+  [key: string]: number | undefined;
+}
+
 export interface Team {
   id: string;
   seasonId: string;
@@ -43,10 +71,12 @@ export interface Team {
   ownerName: string;
   ownerPhotoUrl?: string;
   iconPlayerName?: string;
+  iconPlayerPhotoUrl?: string;
   primaryColor: string;
   secondaryColor: string;
   purse: TeamPurse;
   squadCount?: number;
+  categoryLimits?: TeamCategoryLimits;
 }
 
 export interface TeamPurse {
@@ -80,7 +110,13 @@ export interface Player {
   battingStyle: string;
   bowlingStyle: string;
   photoUrl: string;
+  originalPhotoUrl?: string;
+  normalizedPhotoUrl?: string;
+  photoAspectRatio?: string;
+  photoMatchStatus?: PhotoMatchStatus;
+  driveFileId?: string;
   basePrice: number;
+  basePriceOverride?: number;
   status: PlayerStatus;
   sortOrder: number;
   statsSummary?: PlayerStatsSummary;
@@ -111,12 +147,17 @@ export interface AuctionSession {
   currentLeadingTeam?: Team | null;
   status: AuctionStatus;
   timerSeconds: number;
+  timerExpiresAt?: string;
+  lastBidAt?: string;
+  bidExtensionSeconds?: number;
   round: number;
   bidCount: number;
   recentBids: Bid[];
 }
 
 export interface BidSlab {
+  id?: string;
+  min?: number;
   max: number;
   step: number;
 }
@@ -129,6 +170,22 @@ export interface AuctionRules {
   goldBasePrice: number;
   silverBasePrice: number;
   emergingBasePrice: number;
+  categoryBasePrices?: Record<PlayerCategory, number>;
+  enableIndividualOverrides?: boolean;
   bidSlabRules: BidSlab[];
-  timerDurationSeconds: number;
+  initialTimerSeconds: number;
+  bidExtensionSeconds: number;
+  timerDurationSeconds?: number;
+}
+
+export interface GoogleDriveFileRecord {
+  id: string;
+  name: string;
+  mimeType: string;
+  size?: string;
+  thumbnailLink?: string;
+  webContentLink?: string;
+  matchedPlayerId?: string;
+  matchedPlayerName?: string;
+  matchConfidence?: number;
 }

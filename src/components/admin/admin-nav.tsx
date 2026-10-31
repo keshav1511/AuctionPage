@@ -12,12 +12,15 @@ import {
   FileSpreadsheet,
   LogOut,
   ExternalLink,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useLeague } from "@/lib/context/league-context";
 
 const NAV_ITEMS = [
   { label: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
   { label: "Auction Control", href: "/admin/auction-control", icon: Gavel, badge: "LIVE" },
+  { label: "League Management", href: "/admin/leagues", icon: Layers },
   { label: "Team Management", href: "/admin/teams", icon: Users },
   { label: "Player Management", href: "/admin/players", icon: UserCheck },
   { label: "Auction Results", href: "/admin/results", icon: Trophy },
@@ -27,6 +30,7 @@ const NAV_ITEMS = [
 
 export function AdminNav() {
   const pathname = usePathname();
+  const { activeLeague } = useLeague();
 
   return (
     <aside className="w-64 border-r border-slate-800 bg-charcoal-950 flex flex-col justify-between shrink-0 min-h-screen">
@@ -34,14 +38,19 @@ export function AdminNav() {
         {/* Brand header */}
         <div className="p-6 border-b border-slate-800">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center font-black text-white text-xl shadow-lg shadow-emerald-950/60">
-              N
+            <div
+              className="w-10 h-10 rounded-lg flex items-center justify-center font-black text-white text-xl shadow-lg border border-white/20"
+              style={{ backgroundColor: activeLeague.primaryColor }}
+            >
+              {activeLeague.name.charAt(0)}
             </div>
-            <div>
-              <h2 className="font-bold text-white text-base tracking-wide leading-tight">
-                NTL ADMIN
+            <div className="min-w-0">
+              <h2 className="font-bold text-white text-sm tracking-wide leading-tight truncate">
+                {activeLeague.name}
               </h2>
-              <p className="text-xs text-emerald-400 font-medium">Season 1 Desk</p>
+              <p className="text-[11px] text-emerald-400 font-medium truncate">
+                {activeLeague.matchVenue || "Admin Desk"}
+              </p>
             </div>
           </div>
         </div>

@@ -9,9 +9,11 @@ import { Progress } from "@/components/ui/progress";
 import { formatCurrency } from "@/lib/utils";
 import { MOCK_TEAMS } from "@/lib/mock-data/teams";
 import { MOCK_PLAYERS } from "@/lib/mock-data/players";
+import { useLeague } from "@/lib/context/league-context";
 import { Users } from "lucide-react";
 
 export default function TeamsPage() {
+  const { activeLeague } = useLeague();
   const [selectedTeamId, setSelectedTeamId] = useState<string>(MOCK_TEAMS[0].id);
 
   const selectedTeam = MOCK_TEAMS.find((t) => t.id === selectedTeamId) || MOCK_TEAMS[0];
@@ -25,13 +27,13 @@ export default function TeamsPage() {
         {/* Header */}
         <div className="mb-8">
           <Badge variant="gold" className="text-xs font-mono uppercase mb-2">
-            Season 1 Franchises
+            {activeLeague.name} Franchises
           </Badge>
           <h1 className="text-3xl sm:text-4xl font-black text-white uppercase tracking-tight">
             Teams & Purse Allocation
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Monitor real-time remaining purse balances, minimum squad reserves, and signed players.
+            Official franchises registered for {activeLeague.name} at {activeLeague.matchVenue}.
           </p>
         </div>
 

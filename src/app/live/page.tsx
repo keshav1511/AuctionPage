@@ -15,6 +15,7 @@ import {
 import { MOCK_AUCTION_SESSION } from "@/lib/mock-data/auction";
 import { MOCK_TEAMS } from "@/lib/mock-data/teams";
 import { MOCK_PLAYERS } from "@/lib/mock-data/players";
+import { useLeague } from "@/lib/context/league-context";
 import {
   TrendingUp,
   Award,
@@ -23,6 +24,7 @@ import {
 } from "lucide-react";
 
 export default function LiveAuctionStage() {
+  const { activeLeague } = useLeague();
   const [session] = useState(MOCK_AUCTION_SESSION);
   const [timer, setTimer] = useState(session.timerSeconds);
   const [isHammered, setIsHammered] = useState(false);
@@ -63,7 +65,7 @@ export default function LiveAuctionStage() {
           <div className="lg:col-span-7 bg-charcoal-900/90 rounded-2xl border-2 border-slate-800 p-6 lg:p-8 flex flex-col justify-between relative overflow-hidden shadow-2xl backdrop-blur-md">
             {/* Background subtle watermark */}
             <div className="absolute -right-12 -bottom-12 opacity-5 pointer-events-none text-9xl font-black">
-              NTL
+              {activeLeague.name.charAt(0)}
             </div>
 
             {/* Top Bar of Card: Registration No, Lot, Category */}
@@ -110,8 +112,8 @@ export default function LiveAuctionStage() {
                   />
                   {/* Category ribbon across photo */}
                   <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/90 to-transparent py-2 px-3 text-center">
-                    <span className="text-[11px] font-black tracking-widest text-amber-300 uppercase">
-                      NTL ELITE POOL
+                    <span className="text-[11px] font-black tracking-widest text-amber-300 uppercase truncate block">
+                      {activeLeague.name} POOL
                     </span>
                   </div>
                 </div>

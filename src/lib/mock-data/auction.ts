@@ -11,6 +11,8 @@ export const MOCK_RULES: AuctionRules = {
   silverBasePrice: 25000,
   emergingBasePrice: 15000,
   timerDurationSeconds: 30,
+  initialTimerSeconds: 45,
+  bidExtensionSeconds: 10,
   bidSlabRules: [
     { max: 100000, step: 10000 },
     { max: 500000, step: 25000 },
