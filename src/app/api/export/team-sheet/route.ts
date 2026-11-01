@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import { MOCK_TEAMS } from "@/lib/mock-data/teams";
-import { MOCK_PLAYERS } from "@/lib/mock-data/players";
+import { getTeamsFromSheets, getPlayersFromSheets } from "@/lib/sheets/google-sheets-repository";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const teamId = searchParams.get("teamId");
+  const leagueId = searchParams.get("leagueId") || "league-ntl";
 
-  const team = MOCK_TEAMS.find((t) => t.id === teamId) || MOCK_TEAMS[0];
-  const squad = MOCK_PLAYERS.filter((p) => p.soldToTeamId === team.id);
+  const teams = await getTeamsFromSheets(leagueId);
+  const players = await getPlayersFromSheets(leagueId);
+
+  const team = teams.find((t) => t.id === teamId) || teams[0];
+  if (!team) {
+    return new NextResponse("Team not found", { status: 404 });
+  }
+
+  const squad = players.filter((p) => p.soldToTeamId === team.id);
 
   let csvContent = "Registration No,Player Name,Category,Role,Batting Style,Bowling Style,Winning Bid (INR)\n";
   squad.forEach((player) => {

@@ -9,8 +9,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { AuctionSession, Team, Player, AuctionRules } from "@/types";
 import { MOCK_AUCTION_SESSION, MOCK_RULES } from "@/lib/mock-data/auction";
-import { MOCK_TEAMS } from "@/lib/mock-data/teams";
-import { MOCK_PLAYERS } from "@/lib/mock-data/players";
+import { NTL_TEAMS, NTL_PLAYERS } from "@/config/ntl-season-1";
 
 export interface RealtimeAuctionState {
   session: AuctionSession;
@@ -38,8 +37,8 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
     ...MOCK_AUCTION_SESSION,
     seasonId: leagueId,
   });
-  const [teams, setTeams] = useState<Team[]>(MOCK_TEAMS);
-  const [players, setPlayers] = useState<Player[]>(MOCK_PLAYERS);
+  const [teams, setTeams] = useState<Team[]>(NTL_TEAMS);
+  const [players, setPlayers] = useState<Player[]>(NTL_PLAYERS);
   const [rules, setRules] = useState<AuctionRules>(MOCK_RULES);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [remainingSeconds, setRemainingSeconds] = useState<number>(45);

@@ -3,11 +3,9 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { League, BrandingPalette, Team, Player, AuctionRules } from "@/types";
 import { generateSportsBrandingPalette } from "@/lib/branding/theme-generator";
-import { MOCK_TEAMS } from "@/lib/mock-data/teams";
-import { MOCK_PLAYERS } from "@/lib/mock-data/players";
-import { MOCK_RULES } from "@/lib/mock-data/auction";
 
 import { INITIAL_LEAGUES, DEFAULT_LEAGUE_ID } from "@/lib/mock-data/leagues";
+import { NTL_TEAMS, NTL_PLAYERS, NTL_DEFAULT_RULES, NTL_DEFAULT_LEAGUE } from "@/config/ntl-season-1";
 export { INITIAL_LEAGUES, DEFAULT_LEAGUE_ID };
 
 interface LeagueContextType {
@@ -36,17 +34,17 @@ const STORAGE_KEY = "ntl_auction_active_league_id";
 
 export function LeagueProvider({ children }: { children: ReactNode }) {
   const [leagues, setLeagues] = useState<League[]>(INITIAL_LEAGUES);
-  const [activeLeagueId, setActiveLeagueId] = useState<string>(INITIAL_LEAGUES[0].id);
+  const [activeLeagueId, setActiveLeagueId] = useState<string>(NTL_DEFAULT_LEAGUE.id);
 
-  const [teams, setTeams] = useState<Team[]>(MOCK_TEAMS);
-  const [players, setPlayers] = useState<Player[]>(MOCK_PLAYERS);
-  const [auctionRules, setAuctionRules] = useState<AuctionRules>(MOCK_RULES);
+  const [teams, setTeams] = useState<Team[]>(NTL_TEAMS);
+  const [players, setPlayers] = useState<Player[]>(NTL_PLAYERS);
+  const [auctionRules, setAuctionRules] = useState<AuctionRules>(NTL_DEFAULT_RULES);
 
   // Load active league ID preference on mount
   useEffect(() => {
     try {
       const storedId = localStorage.getItem(STORAGE_KEY);
-      if (storedId) {
+      if (storedId && INITIAL_LEAGUES.some((l) => l.id === storedId)) {
         setActiveLeagueId(storedId);
       }
     } catch {

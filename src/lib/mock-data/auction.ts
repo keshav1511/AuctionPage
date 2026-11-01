@@ -1,112 +1,38 @@
 import { AuctionSession, AuctionRules, Bid } from "@/types";
-import { MOCK_PLAYERS } from "./players";
-import { MOCK_TEAMS } from "./teams";
+import { NTL_PLAYERS, NTL_DEFAULT_RULES } from "@/config/ntl-season-1";
 
-export const MOCK_RULES: AuctionRules = {
-  id: "rules-ntl-1",
-  seasonId: "season-ntl-1",
-  iconBasePrice: 200000,
-  platinumBasePrice: 100000,
-  goldBasePrice: 50000,
-  silverBasePrice: 25000,
-  emergingBasePrice: 15000,
-  timerDurationSeconds: 30,
-  initialTimerSeconds: 45,
-  bidExtensionSeconds: 10,
-  bidSlabRules: [
-    { max: 100000, step: 10000 },
-    { max: 500000, step: 25000 },
-    { max: 1000000, step: 50000 },
-    { max: 999999999, step: 100000 },
-  ],
-  minimumSquadSize: 15,
-  minimumBasePrice: 25000,
-  categoryMinimumBasePrices: {
-    ICON: 200000,
-    PLATINUM: 100000,
-    GOLD: 50000,
-    SILVER: 25000,
-    EMERGING: 15000,
-  },
-};
+export const MOCK_RULES: AuctionRules = NTL_DEFAULT_RULES;
 
-export const MOCK_RECENT_BIDS: Bid[] = [
-  {
-    id: "bid-1",
-    auctionId: "auction-1",
-    playerId: "player-1",
-    teamId: "team-1",
-    teamName: "Nalanda Strikers",
-    teamShortCode: "NST",
-    teamLogoUrl: MOCK_TEAMS[0].logoUrl,
-    amount: 100000,
-    bidType: "BASE",
-    placedAt: new Date(Date.now() - 45000).toISOString(),
-  },
-  {
-    id: "bid-2",
-    auctionId: "auction-1",
-    playerId: "player-1",
-    teamId: "team-3",
-    teamName: "Magadh Warriors",
-    teamShortCode: "MGW",
-    teamLogoUrl: MOCK_TEAMS[2].logoUrl,
-    amount: 150000,
-    bidType: "STANDARD",
-    placedAt: new Date(Date.now() - 30000).toISOString(),
-  },
-  {
-    id: "bid-3",
-    auctionId: "auction-1",
-    playerId: "player-1",
-    teamId: "team-1",
-    teamName: "Nalanda Strikers",
-    teamShortCode: "NST",
-    teamLogoUrl: MOCK_TEAMS[0].logoUrl,
-    amount: 200000,
-    bidType: "STANDARD",
-    placedAt: new Date(Date.now() - 18000).toISOString(),
-  },
-  {
-    id: "bid-4",
-    auctionId: "auction-1",
-    playerId: "player-1",
-    teamId: "team-5",
-    teamName: "Maurya Super Kings",
-    teamShortCode: "MSK",
-    teamLogoUrl: MOCK_TEAMS[4].logoUrl,
-    amount: 275000,
-    bidType: "STANDARD",
-    placedAt: new Date(Date.now() - 5000).toISOString(),
-  },
-];
+export const MOCK_RECENT_BIDS: Bid[] = [];
 
 export const MOCK_AUCTION_SESSION: AuctionSession = {
-  id: "auction-1",
-  seasonId: "season-ntl-1",
-  currentPlayerId: "player-1",
-  currentPlayer: MOCK_PLAYERS[0],
-  currentHighestBid: 275000,
-  currentLeadingTeamId: "team-5",
-  currentLeadingTeam: MOCK_TEAMS[4],
-  status: "IN_PROGRESS",
-  timerSeconds: 21,
+  id: "auction-league-ntl",
+  seasonId: "league-ntl",
+  currentPlayerId: NTL_PLAYERS[0].id,
+  currentPlayer: NTL_PLAYERS[0],
+  currentHighestBid: 0,
+  currentLeadingTeamId: null,
+  currentLeadingTeam: null,
+  status: "IDLE",
+  timerSeconds: 45,
   round: 1,
-  bidCount: 4,
-  recentBids: MOCK_RECENT_BIDS,
+  bidCount: 0,
+  recentBids: [],
 };
 
 /**
- * Calculates next minimum bid according to slab rules
+ * Calculates next minimum bid according to rules
  */
 export function getNextMinimumBid(currentBid: number, basePrice: number): number {
   if (currentBid <= 0) return basePrice;
 
-  for (const slab of MOCK_RULES.bidSlabRules) {
-    if (currentBid < slab.max) {
-      return currentBid + slab.step;
+  if (MOCK_RULES.bidIncrements && MOCK_RULES.bidIncrements.length > 0) {
+    for (const slab of MOCK_RULES.bidIncrements) {
+      if (currentBid < slab.upTo) {
+        return currentBid + slab.increment;
+      }
     }
   }
 
-  return currentBid + 100000;
+  return currentBid + (MOCK_RULES.minBidIncrement || 500);
 }

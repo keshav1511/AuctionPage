@@ -63,18 +63,26 @@ export default function AdminPlayersPage() {
   // Handle data import from Sheets or Excel
   const handleImportComplete = (data: {
     players: Player[];
-    owners: Array<{ name: string; photoUrl?: string }>;
-    icons: Array<{ name: string; photoUrl?: string }>;
+    owners: Array<{ name: string; photoUrl?: string; teamName?: string }>;
+    icons: Array<{ name: string; photoUrl?: string; teamName?: string }>;
   }) => {
     if (data.players.length > 0) {
       setPlayersForActiveLeague(data.players);
     }
 
-    // Auto-associate imported owners and icons with teams if matching or unassigned
+    // Auto-associate imported owners and icons with teams by team name affiliation
     if (data.owners.length > 0 || data.icons.length > 0) {
       teams.forEach((team, idx) => {
-        const matchingOwner = data.owners[idx];
-        const matchingIcon = data.icons[idx];
+        // First try to match by teamName / team affiliation
+        const matchingOwner =
+          data.owners.find(
+            (o) => o.teamName && o.teamName.trim().toLowerCase() === team.name.trim().toLowerCase()
+          ) || data.owners[idx];
+
+        const matchingIcon =
+          data.icons.find(
+            (i) => i.teamName && i.teamName.trim().toLowerCase() === team.name.trim().toLowerCase()
+          ) || data.icons[idx];
 
         if (matchingOwner || matchingIcon) {
           updateTeam(team.id, {
@@ -664,6 +672,7 @@ export default function AdminPlayersPage() {
         isOpen={showImportModal}
         onClose={() => setShowImportModal(false)}
         defaultSheetUrl={activeLeague.googleSheetsUrl}
+        defaultDriveUrl={activeLeague.googleDriveFolderUrl}
         onImportComplete={handleImportComplete}
         activeLeagueId={activeLeague.id}
       />

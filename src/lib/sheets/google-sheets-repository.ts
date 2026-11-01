@@ -32,10 +32,9 @@ import {
 } from "./tab-definitions";
 import { initializeLeagueWorkbook } from "./workbook-manager";
 import { League, Team, Player, AuctionRules, Bid } from "@/types";
-import { INITIAL_LEAGUES, getInitialLeagueById } from "@/lib/mock-data/leagues";
-import { MOCK_TEAMS } from "@/lib/mock-data/teams";
-import { MOCK_PLAYERS } from "@/lib/mock-data/players";
-import { MOCK_RULES } from "@/lib/mock-data/auction";
+import { getInitialLeagueById } from "@/lib/mock-data/leagues";
+import { NTL_DEFAULT_LEAGUE, NTL_DEFAULT_RULES, NTL_TEAMS, NTL_PLAYERS } from "@/config/ntl-season-1";
+import { callAppsScript, isAppsScriptConfigured } from "./apps-script-client";
 
 // Local in-process serialization mutex map per league ID
 const leagueMutexChains = new Map<string, Promise<unknown>>();
@@ -172,17 +171,16 @@ const memoryMirrors = new Map<string, InMemoryLeagueMirror>();
 
 function getOrCreateMemoryMirror(leagueId: string): InMemoryLeagueMirror {
   if (!memoryMirrors.has(leagueId)) {
-    const base = getInitialLeagueById(leagueId) || INITIAL_LEAGUES[0];
-    const initialPlayers = MOCK_PLAYERS.map((p) => ({ ...p, seasonId: leagueId }));
-    const initialTeams = MOCK_TEAMS.map((t) => ({ ...t, seasonId: leagueId }));
-    const initialRules = { ...MOCK_RULES, seasonId: leagueId };
+    const base = getInitialLeagueById(leagueId) || NTL_DEFAULT_LEAGUE;
+    const initialPlayers: Player[] = [...NTL_PLAYERS];
+    const initialTeams: Team[] = [...NTL_TEAMS];
+    const initialRules = { ...NTL_DEFAULT_RULES, seasonId: leagueId };
 
-    const firstPlayer = initialPlayers[0];
     const initialAuctionState: AuctionStateRow = {
       id: `auction-${leagueId}`,
       seasonId: leagueId,
       status: "IDLE",
-      currentPlayerId: firstPlayer ? firstPlayer.id : null,
+      currentPlayerId: initialPlayers[0]?.id || null,
       currentHighestBid: 0,
       currentLeadingTeamId: null,
       timerSeconds: initialRules.initialTimerSeconds || 45,
@@ -220,19 +218,60 @@ export function resolveSpreadsheetIdForLeague(leagueId: string): string | null {
     return process.env.GOOGLE_SHEETS_DATABASE_ID;
   }
 
-  // 2. Check initial league configured URL
+  // 2. Check active memory mirror configured URL for this specific league
+  const mirror = memoryMirrors.get(leagueId);
+  if (mirror?.league?.googleSheetsUrl) {
+    const extracted = extractSpreadsheetId(mirror.league.googleSheetsUrl);
+    if (extracted) return extracted;
+  }
+
+  // 3. Check initial league configured URL
   const league = getInitialLeagueById(leagueId);
   if (league?.googleSheetsUrl) {
     const extracted = extractSpreadsheetId(league.googleSheetsUrl);
     if (extracted) return extracted;
   }
 
-  // 3. Fallback default spreadsheet ID if present
-  if (process.env.GOOGLE_SHEET_ID) {
-    return process.env.GOOGLE_SHEET_ID;
-  }
-
   return null;
+}
+
+/**
+ * Synchronizes complete state from Google Apps Script Web App in a single network request
+ */
+async function syncFromAppsScript(leagueId: string): Promise<boolean> {
+  if (!isAppsScriptConfigured()) return false;
+  try {
+    const data = await callAppsScript<{
+      state?: AuctionStateRow;
+      teams?: Team[];
+      players?: Player[];
+      recentBids?: Bid[];
+    }>("GET_ALL_DATA");
+
+    if (data) {
+      const mirror = getOrCreateMemoryMirror(leagueId);
+      if (Array.isArray(data.teams) && data.teams.length > 0) {
+        mirror.teams = data.teams;
+        teamsCache.set(leagueId, { data: data.teams, expiresAt: Date.now() + CACHE_TTL_MS });
+      }
+      if (Array.isArray(data.players) && data.players.length > 0) {
+        mirror.players = data.players;
+        playersCache.set(leagueId, { data: data.players, expiresAt: Date.now() + CACHE_TTL_MS });
+      }
+      if (data.state && data.state.id) {
+        mirror.state = data.state;
+        stateCache.set(leagueId, { data: data.state, expiresAt: Date.now() + CACHE_TTL_MS });
+      }
+      if (Array.isArray(data.recentBids)) {
+        mirror.bids = data.recentBids;
+        recentBidsCache.set(leagueId, { data: data.recentBids, expiresAt: Date.now() + CACHE_TTL_MS });
+      }
+      return true;
+    }
+  } catch (err) {
+    console.warn("[SheetsRepository] Apps Script sync warning:", err);
+  }
+  return false;
 }
 
 // ==============================================================================
@@ -279,7 +318,7 @@ export async function getLeagueConfigFromSheets(
         if (parsed) {
           const result = {
             league: parsed.league,
-            rules: parsed.rules || { ...MOCK_RULES, seasonId: leagueId },
+            rules: parsed.rules || { ...NTL_DEFAULT_RULES, seasonId: leagueId },
           };
           configCache.set(leagueId, { data: result, expiresAt: Date.now() + CACHE_TTL_MS });
           return result;
@@ -289,7 +328,7 @@ export async function getLeagueConfigFromSheets(
       // Tab was empty; initialize and seed
       await initializeLeagueWorkbook(spreadsheetId, {
         league: getInitialLeagueById(leagueId),
-        rules: { ...MOCK_RULES, seasonId: leagueId },
+        rules: { ...NTL_DEFAULT_RULES, seasonId: leagueId },
       });
 
       const mirror = getOrCreateMemoryMirror(leagueId);
@@ -352,6 +391,11 @@ export async function getTeamsFromSheets(leagueId: string, skipCache = false): P
   }
 
   return coalesceRequest(`teams:${leagueId}`, async () => {
+    if (isAppsScriptConfigured()) {
+      await syncFromAppsScript(leagueId);
+      return getOrCreateMemoryMirror(leagueId).teams;
+    }
+
     const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
     const sheets = getGoogleSheetsClient();
 
@@ -372,9 +416,7 @@ export async function getTeamsFromSheets(leagueId: string, skipCache = false): P
 
       const rows = res.data.values || [];
       if (rows.length === 0) {
-        // Seed initial teams if blank
         const mirror = getOrCreateMemoryMirror(leagueId);
-        await saveTeamsToSheets(leagueId, mirror.teams);
         teamsCache.set(leagueId, { data: mirror.teams, expiresAt: Date.now() + CACHE_TTL_MS });
         return mirror.teams;
       }
@@ -397,13 +439,22 @@ export async function getTeamsFromSheets(leagueId: string, skipCache = false): P
  * Saves or completely replaces all teams in Google Sheets
  */
 export async function saveTeamsToSheets(leagueId: string, teams: Team[]): Promise<void> {
-  const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
-  const sheets = getGoogleSheetsClient();
-
   // Update memory mirror
   const mirror = getOrCreateMemoryMirror(leagueId);
   mirror.teams = teams;
   teamsCache.set(leagueId, { data: teams, expiresAt: Date.now() + CACHE_TTL_MS });
+
+  if (isAppsScriptConfigured()) {
+    try {
+      await callAppsScript("INIT_WORKBOOK", { teams });
+    } catch (err) {
+      console.warn("[SheetsRepository] Apps Script saveTeams error:", err);
+    }
+    return;
+  }
+
+  const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
+  const sheets = getGoogleSheetsClient();
 
   if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
     return;
@@ -451,6 +502,11 @@ export async function getPlayersFromSheets(leagueId: string, skipCache = false):
   }
 
   return coalesceRequest(`players:${leagueId}`, async () => {
+    if (isAppsScriptConfigured()) {
+      await syncFromAppsScript(leagueId);
+      return getOrCreateMemoryMirror(leagueId).players;
+    }
+
     const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
     const sheets = getGoogleSheetsClient();
 
@@ -471,9 +527,7 @@ export async function getPlayersFromSheets(leagueId: string, skipCache = false):
 
       const rows = res.data.values || [];
       if (rows.length === 0) {
-        // Seed initial players if blank
         const mirror = getOrCreateMemoryMirror(leagueId);
-        await savePlayersToSheets(leagueId, mirror.players);
         playersCache.set(leagueId, { data: mirror.players, expiresAt: Date.now() + CACHE_TTL_MS });
         return mirror.players;
       }
@@ -496,13 +550,22 @@ export async function getPlayersFromSheets(leagueId: string, skipCache = false):
  * Saves or completely replaces all players in Google Sheets
  */
 export async function savePlayersToSheets(leagueId: string, players: Player[]): Promise<void> {
-  const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
-  const sheets = getGoogleSheetsClient();
-
   // Update memory mirror
   const mirror = getOrCreateMemoryMirror(leagueId);
   mirror.players = players;
   playersCache.set(leagueId, { data: players, expiresAt: Date.now() + CACHE_TTL_MS });
+
+  if (isAppsScriptConfigured()) {
+    try {
+      await callAppsScript("INIT_WORKBOOK", { players });
+    } catch (err) {
+      console.warn("[SheetsRepository] Apps Script savePlayers error:", err);
+    }
+    return;
+  }
+
+  const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
+  const sheets = getGoogleSheetsClient();
 
   if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
     return;
@@ -553,6 +616,11 @@ export async function getAuctionStateFromSheets(
   }
 
   return coalesceRequest(`state:${leagueId}`, async () => {
+    if (isAppsScriptConfigured()) {
+      await syncFromAppsScript(leagueId);
+      return getOrCreateMemoryMirror(leagueId).state;
+    }
+
     const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
     const sheets = getGoogleSheetsClient();
 
@@ -596,13 +664,22 @@ export async function getAuctionStateFromSheets(
  * Writes updated auction state directly to Google Sheets
  */
 export async function saveAuctionStateToSheets(leagueId: string, state: AuctionStateRow): Promise<void> {
-  const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
-  const sheets = getGoogleSheetsClient();
-
   // Update memory mirror
   const mirror = getOrCreateMemoryMirror(leagueId);
   mirror.state = state;
   stateCache.set(leagueId, { data: state, expiresAt: Date.now() + CACHE_TTL_MS });
+
+  if (isAppsScriptConfigured()) {
+    try {
+      await callAppsScript("SAVE_AUCTION_STATE", state);
+    } catch (err) {
+      console.warn("[SheetsRepository] Apps Script saveAuctionState error:", err);
+    }
+    return;
+  }
+
+  const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
+  const sheets = getGoogleSheetsClient();
 
   if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
     return;

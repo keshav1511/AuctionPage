@@ -49,7 +49,54 @@ export interface League {
   secondaryColor: string;
   brandingPalette?: BrandingPalette;
   backgroundConfig?: BackgroundCustomization;
+  importMetadata?: LeagueImportMetadata;
   created_at?: string;
+}
+
+export interface LeagueImportMetadata {
+  lastImportedAt?: string;
+  totalImported?: number;
+  playerCount?: number;
+  ownerCount?: number;
+  iconCount?: number;
+  teamCount?: number;
+  sourceSheetId?: string;
+  sourceFolderId?: string;
+  sourceSheetUrl?: string;
+  sourceDriveUrl?: string;
+  validationStatus?: 'VALID' | 'WARNING' | 'ERROR';
+}
+
+export type RegistrationPersonType = 'PLAYER' | 'OWNER' | 'ICON';
+
+export interface RegistrationRecord {
+  rowIndex: number;
+  name: string;
+  type: RegistrationPersonType;
+  photoRef: string;
+  teamAffiliation?: string;
+  category?: PlayerCategory;
+  role?: PlayerRole;
+  basePrice?: number;
+  isValid: boolean;
+  errors: string[];
+  warnings: string[];
+  resolvedPhotoUrl?: string;
+}
+
+export interface RegistrationValidationSummary {
+  totalRows: number;
+  validRows: number;
+  invalidRows: number;
+  playerCount: number;
+  ownerCount: number;
+  iconCount: number;
+  teamsDiscovered: string[];
+  duplicates: string[];
+  unmatchedPhotos: string[];
+  errors: string[];
+  warnings: string[];
+  records: RegistrationRecord[];
 }
 
 export interface Season {
@@ -86,6 +133,8 @@ export interface Team {
   purse: TeamPurse;
   squadCount?: number;
   categoryLimits?: TeamCategoryLimits;
+  isCompleted?: boolean;
+  completionStatus?: "INCOMPLETE" | "PENDING_FINAL" | "COMPLETED";
 }
 
 export interface TeamPurse {
@@ -97,6 +146,8 @@ export interface TeamPurse {
   minPlayers: number;
   maxPlayers: number;
   reservedForSquad: number;
+  totalPurse?: number;
+  reservedPurse?: number;
 }
 
 export interface PlayerStatsSummary {
@@ -114,6 +165,7 @@ export interface Player {
   seasonId: string;
   registrationNo: string;
   fullName: string;
+  name?: string;
   category: PlayerCategory;
   primaryRole: PlayerRole;
   battingStyle: string;
@@ -193,21 +245,26 @@ export interface BidSlab {
 }
 
 export interface AuctionRules {
-  id: string;
+  id?: string;
   seasonId: string;
-  iconBasePrice: number;
-  platinumBasePrice: number;
-  goldBasePrice: number;
-  silverBasePrice: number;
-  emergingBasePrice: number;
+  iconBasePrice?: number;
+  platinumBasePrice?: number;
+  goldBasePrice?: number;
+  silverBasePrice?: number;
+  emergingBasePrice?: number;
   categoryBasePrices?: Record<PlayerCategory, number>;
   enableIndividualOverrides?: boolean;
-  bidSlabRules: BidSlab[];
+  bidSlabRules?: BidSlab[];
   initialTimerSeconds: number;
   bidExtensionSeconds: number;
   timerDurationSeconds?: number;
   minimumSquadSize?: number;
+  maximumSquadSize?: number;
   minimumBasePrice?: number;
+  minBidIncrement?: number;
+  purseAmount?: number;
+  categoryQuotas?: Record<string, number>;
+  bidIncrements?: Array<{ upTo: number; increment: number }>;
   categoryMinimumBasePrices?: Partial<Record<PlayerCategory, number>>;
 }
 

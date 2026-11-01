@@ -62,6 +62,7 @@ export function serializeLeagueConfig(league: League, rules?: AuctionRules): str
   const brandingWithBackground = {
     ...(league.brandingPalette || {}),
     backgroundConfig: league.backgroundConfig,
+    importMetadata: league.importMetadata,
   };
 
   return [
@@ -90,12 +91,16 @@ export function deserializeLeagueConfig(row: (string | undefined)[]): { league: 
 
   let brandingPalette: BrandingPalette | undefined;
   let backgroundConfig: League["backgroundConfig"] = undefined;
+  let importMetadata: League["importMetadata"] = undefined;
   try {
     if (row[14]) {
       const parsed = JSON.parse(row[14]);
       brandingPalette = parsed;
       if (parsed.backgroundConfig) {
         backgroundConfig = parsed.backgroundConfig;
+      }
+      if (parsed.importMetadata) {
+        importMetadata = parsed.importMetadata;
       }
     }
   } catch {}
@@ -122,6 +127,7 @@ export function deserializeLeagueConfig(row: (string | undefined)[]): { league: 
     secondaryColor: row[13] || "#F59E0B",
     brandingPalette,
     backgroundConfig,
+    importMetadata,
     created_at: row[16] || new Date().toISOString(),
   };
 

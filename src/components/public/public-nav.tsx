@@ -21,12 +21,20 @@ export function PublicNav() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         {/* League Logo & Brand */}
         <Link href="/" className="flex items-center gap-3 group">
-          <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center font-black text-white text-xl shadow-lg group-hover:scale-105 transition-transform border border-white/20"
-            style={{ backgroundColor: activeLeague.primaryColor }}
-          >
-            {activeLeague.name.charAt(0)}
-          </div>
+          {activeLeague.logoUrl ? (
+            <img
+              src={activeLeague.logoUrl}
+              alt={activeLeague.name}
+              className="w-10 h-10 object-contain rounded-xl shadow-lg group-hover:scale-105 transition-transform border border-white/20 bg-slate-900 p-0.5"
+            />
+          ) : (
+            <div
+              className="w-10 h-10 rounded-xl flex items-center justify-center font-black text-white text-xl shadow-lg group-hover:scale-105 transition-transform border border-white/20"
+              style={{ backgroundColor: activeLeague.primaryColor }}
+            >
+              {activeLeague.name.charAt(0)}
+            </div>
+          )}
           <div>
             <div className="flex items-center gap-2">
               <span className="font-black text-white text-base tracking-wider uppercase">

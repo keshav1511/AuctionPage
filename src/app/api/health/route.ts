@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isAppsScriptConfigured } from "@/lib/sheets/apps-script-client";
 
 export async function GET() {
   return NextResponse.json({
@@ -7,9 +8,9 @@ export async function GET() {
     edition: "Season 1",
     timestamp: new Date().toISOString(),
     services: {
-      dataStorage: "google_sheets_v4",
-      googleSheets: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ? "configured" : "unconfigured_mock_fallback",
-      googleDrive: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ? "configured" : "unconfigured_mock_fallback",
+      dataStorage: "google_sheets_apps_script",
+      persistence: isAppsScriptConfigured() ? "connected" : "authoritative_local_mirror",
     },
   });
 }
+

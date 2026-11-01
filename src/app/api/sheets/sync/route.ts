@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleSheetsService } from "@/lib/google/sheets";
-import { MOCK_PLAYERS } from "@/lib/mock-data/players";
 
 export async function POST(req: NextRequest) {
   try {
@@ -10,13 +9,12 @@ export async function POST(req: NextRequest) {
     const sheetsService = new GoogleSheetsService();
 
     if (!sheetsService.isConfigured()) {
-      // Graceful fallback for local evaluation
       return NextResponse.json({
-        status: "success",
-        mode: "mock_fallback",
-        message: "Google Service Account credentials not provided in .env.local. Returned local sample players.",
-        count: MOCK_PLAYERS.length,
-        players: MOCK_PLAYERS,
+        status: "awaiting_credentials",
+        mode: "unconfigured",
+        message: "Google Service Account credentials not provided in .env.local. Configure credentials or use the Dynamic Data Source Import.",
+        count: 0,
+        players: [],
       });
     }
 

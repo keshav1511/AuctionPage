@@ -69,7 +69,7 @@ export interface AuctionRealtimeEvent {
   type: string;
   leagueId: string;
   timestamp: string;
-  session: AuctionSession;
+  session?: AuctionSession;
   teams?: Team[];
   players?: Player[];
   rules?: AuctionRules;
@@ -355,8 +355,25 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
     }
   }
 
-  // Handle UPDATE_PLAYERS directly
+  // Handle UPDATE_PLAYERS directly with Active Auction Protection
   if (type === "UPDATE_PLAYERS" && payload.players) {
+    const currentState = await getAuctionStateFromSheets(leagueId);
+    if (currentState && (currentState.status === "IN_PROGRESS" || currentState.status === "PAUSED" || currentState.status === "FINISHED")) {
+      const existingPlayers = await getPlayersFromSheets(leagueId);
+      const soldPlayers = existingPlayers.filter((p) => p.status === "SOLD");
+
+      // Verify that all sold players are preserved intact
+      for (const sp of soldPlayers) {
+        const matchingUpdated = payload.players.find((p) => p.id === sp.id);
+        if (!matchingUpdated || matchingUpdated.status !== "SOLD" || matchingUpdated.soldToTeamId !== sp.soldToTeamId) {
+          return {
+            success: false,
+            error: `Cannot modify or delete player "${sp.fullName}" who is already SOLD during an active auction.`,
+          };
+        }
+      }
+    }
+
     await savePlayersToSheets(leagueId, payload.players);
     const freshState = await getAuthoritativeLeagueState(leagueId);
     if (freshState) {

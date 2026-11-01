@@ -7,8 +7,6 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
-import { MOCK_TEAMS } from "@/lib/mock-data/teams";
-import { MOCK_PLAYERS } from "@/lib/mock-data/players";
 import {
   Tv,
   Users,
@@ -20,11 +18,11 @@ import {
 } from "lucide-react";
 
 export default function HomePage() {
-  const { activeLeague } = useLeague();
+  const { activeLeague, teams, players } = useLeague();
 
-  const totalPurseAllocated = MOCK_TEAMS.reduce((acc, t) => acc + t.purse.totalBudget, 0);
-  const totalPurseSpent = MOCK_TEAMS.reduce((acc, t) => acc + t.purse.spentAmount, 0);
-  const soldPlayers = MOCK_PLAYERS.filter((p) => p.status === "SOLD").length;
+  const totalPurseAllocated = teams.reduce((acc, t) => acc + t.purse.totalBudget, 0);
+  const totalPurseSpent = teams.reduce((acc, t) => acc + t.purse.spentAmount, 0);
+  const soldPlayers = players.filter((p) => p.status === "SOLD").length;
 
   return (
     <div className="min-h-screen bg-[#090D10] text-slate-100 flex flex-col">
@@ -128,7 +126,7 @@ export default function HomePage() {
                     Competing Teams
                   </p>
                   <p className="text-2xl font-black text-white font-mono mt-1">
-                    {MOCK_TEAMS.length} Franchises
+                    {teams.length} Franchises
                   </p>
                   <p className="text-[11px] text-slate-500 mt-1">{activeLeague.matchVenue}</p>
                 </CardContent>
@@ -156,7 +154,7 @@ export default function HomePage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {MOCK_TEAMS.map((team) => (
+            {teams.map((team) => (
               <Card
                 key={team.id}
                 className="border-slate-800 bg-charcoal-900/80 hover:border-emerald-500/40 transition-all hover:-translate-y-1"

@@ -1,12 +1,29 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Player, PlayerCategory, PlayerRole } from "@/types";
-import { FileSpreadsheet, Upload, CheckCircle2, AlertTriangle, ArrowRight, RefreshCw, X, Table, Users, Award, Shield } from "lucide-react";
+import { Player } from "@/types";
+import {
+  detectRegistrationColumns,
+  parseRegistrationRows,
+  ColumnMappingConfig,
+} from "@/lib/sheets/registration-parser";
+import {
+  FileSpreadsheet,
+  Upload,
+  AlertTriangle,
+  ArrowRight,
+  RefreshCw,
+  X,
+  Table,
+  Users,
+  Award,
+  Shield,
+  FolderOpen,
+} from "lucide-react";
 
 export interface ParsedSheetPayload {
   success: boolean;
@@ -17,24 +34,15 @@ export interface ParsedSheetPayload {
   totalRows: number;
 }
 
-export interface ColumnMapping {
-  nameCol: string;
-  typeCol: string;
-  regNoCol: string;
-  categoryCol: string;
-  roleCol: string;
-  priceCol: string;
-  photoCol: string;
-}
-
 interface ImportModalProps {
   isOpen: boolean;
   onClose: () => void;
   defaultSheetUrl?: string;
-  onImportComplete: (data: {
+  defaultDriveUrl?: string;
+  onImportComplete?: (data: {
     players: Player[];
-    owners: Array<{ name: string; photoUrl?: string }>;
-    icons: Array<{ name: string; photoUrl?: string }>;
+    owners: Array<{ name: string; photoUrl?: string; teamName?: string }>;
+    icons: Array<{ name: string; photoUrl?: string; teamName?: string }>;
   }) => void;
   activeLeagueId: string;
 }
@@ -43,16 +51,22 @@ export function ImportModal({
   isOpen,
   onClose,
   defaultSheetUrl,
+  defaultDriveUrl,
   onImportComplete,
   activeLeagueId,
 }: ImportModalProps) {
   const [sourceType, setSourceType] = useState<"sheets" | "excel">("sheets");
-  const [sheetUrl, setSheetUrl] = useState(
-    defaultSheetUrl || "https://docs.google.com/spreadsheets/d/1uC87Sn8KLbAHs9g1ZT63AIyIY85C7LVh-cZF8dvvgo0/edit?usp=sharing"
-  );
+  const [sheetUrl, setSheetUrl] = useState(defaultSheetUrl || "");
+  const [driveUrl, setDriveUrl] = useState(defaultDriveUrl || "");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
+
+  // Sync props when opening
+  useEffect(() => {
+    if (defaultSheetUrl !== undefined) setSheetUrl(defaultSheetUrl || "");
+    if (defaultDriveUrl !== undefined) setDriveUrl(defaultDriveUrl || "");
+  }, [defaultSheetUrl, defaultDriveUrl, isOpen]);
 
   // Parsed sheet data
   const [parsedData, setParsedData] = useState<ParsedSheetPayload | null>(null);
@@ -60,9 +74,10 @@ export function ImportModal({
   const [selectedSheet, setSelectedSheet] = useState<string>("");
 
   // Column Mapping state
-  const [mapping, setMapping] = useState<ColumnMapping>({
+  const [mapping, setMapping] = useState<ColumnMappingConfig>({
     nameCol: "",
     typeCol: "",
+    teamCol: "",
     regNoCol: "",
     categoryCol: "",
     roleCol: "",
@@ -72,27 +87,6 @@ export function ImportModal({
 
   // Step state: 1 = source & parse, 2 = map columns & preview
   const [step, setStep] = useState<1 | 2>(1);
-
-  // Auto-detect mappings from headers
-  const autoDetectColumns = (headers: string[]): ColumnMapping => {
-    const findHeader = (patterns: string[]): string => {
-      const match = headers.find((h) => {
-        const lower = h.toLowerCase().trim();
-        return patterns.some((p) => lower.includes(p));
-      });
-      return match || "";
-    };
-
-    return {
-      nameCol: findHeader(["name", "player name", "athlete", "full name"]),
-      typeCol: findHeader(["player/ icon/ owner", "type", "role/type", "category/type", "designation"]),
-      regNoCol: findHeader(["reg", "id", "no", "token"]),
-      categoryCol: findHeader(["category", "tier", "grade", "class"]),
-      roleCol: findHeader(["role", "primary role", "specialization", "skill"]),
-      priceCol: findHeader(["price", "base price", "base", "cost", "points"]),
-      photoCol: findHeader(["photo", "photo link", "image", "picture", "url"]),
-    };
-  };
 
   // Fetch and parse Google Sheet
   const handleParseGoogleSheet = async () => {
@@ -118,7 +112,8 @@ export function ImportModal({
       setParsedData(data);
       setAvailableSheets(data.sheets || []);
       setSelectedSheet(data.activeSheet || "");
-      setMapping(autoDetectColumns(data.headers || []));
+      const detected = detectRegistrationColumns(data.headers || [], data.rows || []);
+      setMapping(detected);
       setStep(2);
     } catch (err: unknown) {
       setErrorNotice(err instanceof Error ? err.message : "Failed to connect to Google Sheets.");
@@ -155,7 +150,8 @@ export function ImportModal({
       setParsedData(data);
       setAvailableSheets(data.sheets || []);
       setSelectedSheet(data.activeSheet || "");
-      setMapping(autoDetectColumns(data.headers || []));
+      const detected = detectRegistrationColumns(data.headers || [], data.rows || []);
+      setMapping(detected);
       setStep(2);
     } catch (err: unknown) {
       setErrorNotice(err instanceof Error ? err.message : "Failed to parse Excel file.");
@@ -164,110 +160,101 @@ export function ImportModal({
     }
   };
 
-  // Helper to extract value from row according to mapping
-  const getColValue = (row: (string | number | null | undefined)[], colName: string): string => {
-    if (!colName || !parsedData) return "";
-    const colIdx = parsedData.headers.indexOf(colName);
-    if (colIdx === -1 || colIdx >= row.length) return "";
-    const val = row[colIdx];
-    return val !== undefined && val !== null ? String(val).trim() : "";
-  };
+  // Derive transformed rows with categorization using pure parser
+  const validationSummary = parsedData
+    ? parseRegistrationRows(parsedData.headers, parsedData.rows, mapping)
+    : null;
 
-  // Derive transformed rows with categorization
-  const deriveRecords = () => {
-    if (!parsedData) return { players: [], owners: [], icons: [], duplicates: [], warnings: [] };
+  const derivedPlayers: Player[] = [];
+  const derivedOwners: Array<{ name: string; photoUrl?: string; teamName?: string }> = [];
+  const derivedIcons: Array<{ name: string; photoUrl?: string; teamName?: string }> = [];
 
-    const players: Player[] = [];
-    const owners: Array<{ name: string; photoUrl?: string }> = [];
-    const icons: Array<{ name: string; photoUrl?: string }> = [];
-    const duplicates: string[] = [];
-    const warnings: string[] = [];
-    const seenNames = new Set<string>();
-
-    parsedData.rows.forEach((row, idx) => {
-      const rawName = getColValue(row, mapping.nameCol);
-      if (!rawName) return; // skip blank row
-
-      const lowerName = rawName.toLowerCase();
-      if (seenNames.has(lowerName)) {
-        duplicates.push(rawName);
-      }
-      seenNames.add(lowerName);
-
-      const rawType = getColValue(row, mapping.typeCol).toUpperCase();
-      const rawCategory = getColValue(row, mapping.categoryCol).toUpperCase();
-      const rawRole = getColValue(row, mapping.roleCol).toUpperCase();
-      const rawPrice = getColValue(row, mapping.priceCol);
-      const photoUrl = getColValue(row, mapping.photoCol);
-      const regNo = getColValue(row, mapping.regNoCol) || `REG-${1000 + idx}`;
-
-      // Identify whether this row is an Owner, an Icon Player, or a standard Auction Player
-      const isOwner = rawType.includes("OWNER");
-      const isIcon = rawType.includes("ICON") || rawCategory.includes("ICON");
-
-      if (isOwner) {
-        owners.push({ name: rawName, photoUrl: photoUrl || undefined });
-      } else if (isIcon) {
-        icons.push({ name: rawName, photoUrl: photoUrl || undefined });
-        // Also register Icon in player pool with ICON category
-        players.push({
+  if (validationSummary) {
+    validationSummary.records.forEach((rec, idx) => {
+      if (rec.type === "OWNER") {
+        derivedOwners.push({
+          name: rec.name,
+          photoUrl: rec.resolvedPhotoUrl || rec.photoRef || undefined,
+          teamName: rec.teamAffiliation,
+        });
+      } else if (rec.type === "ICON") {
+        derivedIcons.push({
+          name: rec.name,
+          photoUrl: rec.resolvedPhotoUrl || rec.photoRef || undefined,
+          teamName: rec.teamAffiliation,
+        });
+        derivedPlayers.push({
           id: `player-icon-${idx}-${Date.now()}`,
           seasonId: activeLeagueId,
-          registrationNo: regNo,
-          fullName: rawName,
+          registrationNo: `ICON-${idx + 1}`,
+          fullName: rec.name,
           category: "ICON",
-          primaryRole: "ALL_ROUNDER",
+          primaryRole: rec.role || "ALL_ROUNDER",
           battingStyle: "Right-Hand Bat",
           bowlingStyle: "Right-Arm Medium",
-          photoUrl: photoUrl || "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=600&auto=format&fit=crop&q=80",
-          basePrice: 200000,
+          photoUrl: rec.resolvedPhotoUrl || rec.photoRef || "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=600&auto=format&fit=crop&q=80",
+          basePrice: rec.basePrice || 200000,
           status: "AVAILABLE",
           sortOrder: idx + 1,
         });
       } else {
-        // Standard Player
-        let category: PlayerCategory = "SILVER";
-        if (rawCategory.includes("PLATINUM")) category = "PLATINUM";
-        else if (rawCategory.includes("GOLD")) category = "GOLD";
-        else if (rawCategory.includes("EMERGING")) category = "EMERGING";
-
-        let role: PlayerRole = "BATSMAN";
-        if (rawRole.includes("BOWL")) role = "BOWLER";
-        else if (rawRole.includes("ALL") || rawRole.includes("AR")) role = "ALL_ROUNDER";
-        else if (rawRole.includes("KEEP") || rawRole.includes("WK")) role = "WICKET_KEEPER";
-
-        const parsedBasePrice = rawPrice ? parseInt(rawPrice.replace(/[^0-9]/g, ""), 10) || 25000 : 25000;
-
-        players.push({
+        derivedPlayers.push({
           id: `player-import-${idx}-${Date.now()}`,
           seasonId: activeLeagueId,
-          registrationNo: regNo,
-          fullName: rawName,
-          category,
-          primaryRole: role,
+          registrationNo: `REG-${1000 + idx}`,
+          fullName: rec.name,
+          category: rec.category || "SILVER",
+          primaryRole: rec.role || "BATSMAN",
           battingStyle: "Right-Hand Bat",
           bowlingStyle: "Right-Arm Medium",
-          photoUrl: photoUrl || "https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?w=600&auto=format&fit=crop&q=80",
-          basePrice: parsedBasePrice,
+          photoUrl: rec.resolvedPhotoUrl || rec.photoRef || "https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?w=600&auto=format&fit=crop&q=80",
+          basePrice: rec.basePrice || 25000,
           status: "AVAILABLE",
           sortOrder: idx + 1,
         });
       }
     });
+  }
 
-    return { players, owners, icons, duplicates, warnings };
-  };
-
-  const { players, owners, icons, duplicates } = deriveRecords();
-
-  const handleConfirmImport = () => {
-    if (players.length === 0 && owners.length === 0 && icons.length === 0) {
+  const handleConfirmImport = async () => {
+    if (!validationSummary || validationSummary.records.length === 0) {
       setErrorNotice("No valid records found to import.");
       return;
     }
 
-    onImportComplete({ players, owners, icons });
-    onClose();
+    setLoading(true);
+    setErrorNotice(null);
+
+    try {
+      // If importing from Google Sheets, invoke server datasource import route
+      if (sourceType === "sheets" && sheetUrl.trim()) {
+        const res = await fetch("/api/datasource/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            leagueId: activeLeagueId,
+            googleSheetsUrl: sheetUrl.trim(),
+            googleDriveFolderUrl: driveUrl.trim() || undefined,
+          }),
+        });
+        const result = await res.json();
+        if (!result.success) {
+          throw new Error(result.error || "Failed to import registration data into league workbook");
+        }
+      }
+
+      onImportComplete?.({
+        players: derivedPlayers,
+        owners: derivedOwners,
+        icons: derivedIcons,
+      });
+
+      onClose();
+    } catch (err: unknown) {
+      setErrorNotice(err instanceof Error ? err.message : "Import failed");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -353,7 +340,9 @@ export function ImportModal({
               {sourceType === "sheets" ? (
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <label className="text-xs font-semibold text-slate-700">Google Sheets URL</label>
+                    <label className="text-xs font-semibold text-slate-700">
+                      Google Sheets Registration URL * <span className="text-red-500">(Required)</span>
+                    </label>
                     <Input
                       value={sheetUrl}
                       onChange={(e) => setSheetUrl(e.target.value)}
@@ -361,17 +350,23 @@ export function ImportModal({
                       className="bg-white border-slate-300 font-mono text-xs"
                     />
                     <p className="text-[11px] text-slate-500">
-                      Supports any Google Sheet with public view permissions or authorized service account access.
+                      URL of the Google Sheet containing player registrations, icons, owners, and team affiliations.
                     </p>
                   </div>
 
-                  <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs text-slate-600">
-                    <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                      Reference Spreadsheet Pre-Loaded
-                    </div>
-                    <p className="text-[11px]">
-                      The official Nalanda Turf League reference sheet (with columns <code>Name</code>, <code>Photo Link</code>, and <code>Player/ Icon/ Owner</code>) is loaded by default.
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                      <FolderOpen className="w-3.5 h-3.5 text-slate-500" />
+                      Google Drive Photographs Folder URL <span className="text-slate-400 font-normal">(Optional)</span>
+                    </label>
+                    <Input
+                      value={driveUrl}
+                      onChange={(e) => setDriveUrl(e.target.value)}
+                      placeholder="https://drive.google.com/drive/folders/..."
+                      className="bg-white border-slate-300 font-mono text-xs"
+                    />
+                    <p className="text-[11px] text-slate-500">
+                      Folder containing photo files. Filenames in the sheet will be dynamically matched (case-insensitive, extension-tolerant).
                     </p>
                   </div>
 
@@ -379,7 +374,7 @@ export function ImportModal({
                     <Button
                       type="button"
                       onClick={handleParseGoogleSheet}
-                      disabled={loading}
+                      disabled={loading || !sheetUrl.trim()}
                       className="bg-slate-900 hover:bg-slate-800 text-white gap-2 font-medium"
                     >
                       {loading ? (
@@ -482,7 +477,7 @@ export function ImportModal({
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   <div className="space-y-1">
                     <label className="text-[11px] font-semibold text-slate-700">
                       Full Name * <span className="text-red-500">(Required)</span>
@@ -493,9 +488,9 @@ export function ImportModal({
                       className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
                     >
                       <option value="">-- Choose Column --</option>
-                      {parsedData.headers.map((h) => (
-                        <option key={h} value={h}>
-                          {h}
+                      {parsedData.headers.map((h, i) => (
+                        <option key={i} value={h}>
+                          {h || `Column ${i + 1}`}
                         </option>
                       ))}
                     </select>
@@ -511,9 +506,9 @@ export function ImportModal({
                       className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
                     >
                       <option value="">-- Choose Column (Optional) --</option>
-                      {parsedData.headers.map((h) => (
-                        <option key={h} value={h}>
-                          {h}
+                      {parsedData.headers.map((h, i) => (
+                        <option key={i} value={h}>
+                          {h || `Column ${i + 1}`}
                         </option>
                       ))}
                     </select>
@@ -521,7 +516,25 @@ export function ImportModal({
 
                   <div className="space-y-1">
                     <label className="text-[11px] font-semibold text-slate-700">
-                      Photo Link / URL
+                      Team Affiliation <span className="text-slate-400">(Owners & Icons)</span>
+                    </label>
+                    <select
+                      value={mapping.teamCol}
+                      onChange={(e) => setMapping({ ...mapping, teamCol: e.target.value })}
+                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
+                    >
+                      <option value="">-- Choose Column (Optional) --</option>
+                      {parsedData.headers.map((h, i) => (
+                        <option key={i} value={h}>
+                          {h || `Column ${i + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-slate-700">
+                      Photo Link / Filename
                     </label>
                     <select
                       value={mapping.photoCol}
@@ -529,9 +542,9 @@ export function ImportModal({
                       className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
                     >
                       <option value="">-- Choose Column (Optional) --</option>
-                      {parsedData.headers.map((h) => (
-                        <option key={h} value={h}>
-                          {h}
+                      {parsedData.headers.map((h, i) => (
+                        <option key={i} value={h}>
+                          {h || `Column ${i + 1}`}
                         </option>
                       ))}
                     </select>
@@ -540,14 +553,14 @@ export function ImportModal({
                   <div className="space-y-1">
                     <label className="text-[11px] font-semibold text-slate-700">Category / Tier</label>
                     <select
-                      value={mapping.categoryCol}
+                      value={mapping.categoryCol || ""}
                       onChange={(e) => setMapping({ ...mapping, categoryCol: e.target.value })}
                       className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
                     >
                       <option value="">-- Choose Column (Optional) --</option>
-                      {parsedData.headers.map((h) => (
-                        <option key={h} value={h}>
-                          {h}
+                      {parsedData.headers.map((h, i) => (
+                        <option key={i} value={h}>
+                          {h || `Column ${i + 1}`}
                         </option>
                       ))}
                     </select>
@@ -556,14 +569,14 @@ export function ImportModal({
                   <div className="space-y-1">
                     <label className="text-[11px] font-semibold text-slate-700">Playing Role</label>
                     <select
-                      value={mapping.roleCol}
+                      value={mapping.roleCol || ""}
                       onChange={(e) => setMapping({ ...mapping, roleCol: e.target.value })}
                       className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
                     >
                       <option value="">-- Choose Column (Optional) --</option>
-                      {parsedData.headers.map((h) => (
-                        <option key={h} value={h}>
-                          {h}
+                      {parsedData.headers.map((h, i) => (
+                        <option key={i} value={h}>
+                          {h || `Column ${i + 1}`}
                         </option>
                       ))}
                     </select>
@@ -572,14 +585,14 @@ export function ImportModal({
                   <div className="space-y-1">
                     <label className="text-[11px] font-semibold text-slate-700">Base Price</label>
                     <select
-                      value={mapping.priceCol}
+                      value={mapping.priceCol || ""}
                       onChange={(e) => setMapping({ ...mapping, priceCol: e.target.value })}
                       className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
                     >
                       <option value="">-- Choose Column (Optional) --</option>
-                      {parsedData.headers.map((h) => (
-                        <option key={h} value={h}>
-                          {h}
+                      {parsedData.headers.map((h, i) => (
+                        <option key={i} value={h}>
+                          {h || `Column ${i + 1}`}
                         </option>
                       ))}
                     </select>
@@ -592,24 +605,43 @@ export function ImportModal({
                 <div className="font-semibold text-slate-700">Detected Records:</div>
                 <Badge variant="outline" className="bg-white text-slate-800 font-semibold gap-1">
                   <Users className="w-3 h-3 text-blue-600" />
-                  {players.length} Players
+                  {derivedPlayers.length} Players
                 </Badge>
                 <Badge variant="outline" className="bg-white text-slate-800 font-semibold gap-1">
                   <Award className="w-3 h-3 text-amber-600" />
-                  {icons.length} Icon Players
+                  {derivedIcons.length} Icon Players
                 </Badge>
                 <Badge variant="outline" className="bg-white text-slate-800 font-semibold gap-1">
                   <Shield className="w-3 h-3 text-emerald-600" />
-                  {owners.length} Team Owners
+                  {derivedOwners.length} Team Owners
                 </Badge>
+                {validationSummary && validationSummary.teamsDiscovered.length > 0 && (
+                  <Badge variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-300 font-semibold gap-1">
+                    {validationSummary.teamsDiscovered.length} Teams Discovered
+                  </Badge>
+                )}
 
-                {duplicates.length > 0 && (
+                {validationSummary && validationSummary.duplicates.length > 0 && (
                   <Badge variant="destructive" className="gap-1 font-semibold">
                     <AlertTriangle className="w-3 h-3" />
-                    {duplicates.length} Duplicates Detected
+                    {validationSummary.duplicates.length} Duplicates Detected
                   </Badge>
                 )}
               </div>
+
+              {/* Discovered Teams preview if any */}
+              {validationSummary && validationSummary.teamsDiscovered.length > 0 && (
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-1">
+                  <div className="font-semibold text-slate-700">Discovered Franchises from Affiliation:</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {validationSummary.teamsDiscovered.map((teamName, idx) => (
+                      <span key={idx} className="bg-white border border-slate-200 px-2 py-0.5 rounded text-[11px] font-medium text-slate-800">
+                        {teamName}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Live Preview Table */}
               <div className="space-y-2">
@@ -623,22 +655,21 @@ export function ImportModal({
                         <th className="p-2.5">#</th>
                         <th className="p-2.5">Name</th>
                         <th className="p-2.5">Detected Type</th>
+                        <th className="p-2.5">Team Affiliation</th>
+                        <th className="p-2.5">Photo Link / File</th>
                         <th className="p-2.5">Category</th>
-                        <th className="p-2.5">Role</th>
                         <th className="p-2.5">Base Price</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
-                      {parsedData.rows.slice(0, 15).map((row, i) => {
-                        const name = getColValue(row, mapping.nameCol);
-                        const type = getColValue(row, mapping.typeCol) || "Player";
-                        const isDup = duplicates.includes(name);
+                      {validationSummary?.records.slice(0, 15).map((rec, i) => {
+                        const isDup = validationSummary.duplicates.includes(rec.name);
 
                         return (
                           <tr key={i} className={isDup ? "bg-amber-50" : "hover:bg-slate-50"}>
                             <td className="p-2.5 font-mono text-slate-400">{i + 1}</td>
                             <td className="p-2.5 font-semibold text-slate-900">
-                              {name || <span className="text-slate-300 italic">(Empty)</span>}
+                              {rec.name || <span className="text-slate-300 italic">(Empty)</span>}
                               {isDup && (
                                 <span className="ml-2 text-[10px] text-amber-700 font-bold bg-amber-100 px-1 py-0.5 rounded">
                                   Duplicate
@@ -649,22 +680,27 @@ export function ImportModal({
                               <Badge
                                 variant="outline"
                                 className={`text-[10px] font-bold ${
-                                  type.toLowerCase().includes("owner")
+                                  rec.type === "OWNER"
                                     ? "bg-purple-50 text-purple-700 border-purple-200"
-                                    : type.toLowerCase().includes("icon")
+                                    : rec.type === "ICON"
                                     ? "bg-amber-50 text-amber-700 border-amber-200"
                                     : "bg-blue-50 text-blue-700 border-blue-200"
                                 }`}
                               >
-                                {type}
+                                {rec.type}
                               </Badge>
                             </td>
-                            <td className="p-2.5 text-slate-600">
-                              {type.toLowerCase().includes("icon") ? "ICON" : "SILVER"}
+                            <td className="p-2.5 text-slate-700 font-medium">
+                              {rec.teamAffiliation || <span className="text-slate-400 italic">None</span>}
                             </td>
-                            <td className="p-2.5 text-slate-600">Batsman</td>
+                            <td className="p-2.5 text-slate-600 truncate max-w-[150px] font-mono text-[11px]">
+                              {rec.photoRef || <span className="text-slate-300 italic">None</span>}
+                            </td>
+                            <td className="p-2.5 text-slate-600">
+                              {rec.type === "ICON" ? "ICON" : rec.category || "SILVER"}
+                            </td>
                             <td className="p-2.5 font-mono text-slate-700">
-                              {type.toLowerCase().includes("icon") ? "₹2,00,000" : "₹25,000"}
+                              {rec.type === "ICON" ? "₹2,00,000" : (rec.basePrice ? `₹${rec.basePrice.toLocaleString("en-IN")}` : "₹25,000")}
                             </td>
                           </tr>
                         );
@@ -681,6 +717,7 @@ export function ImportModal({
                   variant="outline"
                   size="sm"
                   onClick={() => setStep(1)}
+                  disabled={loading}
                   className="border-slate-300 text-slate-700 hover:bg-slate-50"
                 >
                   Back to Source
@@ -692,6 +729,7 @@ export function ImportModal({
                     variant="outline"
                     size="sm"
                     onClick={onClose}
+                    disabled={loading}
                     className="border-slate-300 text-slate-700 hover:bg-slate-50"
                   >
                     Cancel
@@ -699,9 +737,17 @@ export function ImportModal({
                   <Button
                     type="button"
                     onClick={handleConfirmImport}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-5"
+                    disabled={loading || derivedPlayers.length === 0}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-5 gap-2"
                   >
-                    Import {players.length} Players & Roles
+                    {loading ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        Importing & Syncing Data...
+                      </>
+                    ) : (
+                      `Import ${derivedPlayers.length} Players & Rosters`
+                    )}
                   </Button>
                 </div>
               </div>

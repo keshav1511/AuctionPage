@@ -12,7 +12,6 @@ import {
   getCategoryBadgeColor,
   getRoleBadgeColor,
 } from "@/lib/utils";
-import { MOCK_PLAYERS } from "@/lib/mock-data/players";
 import { useLeague } from "@/lib/context/league-context";
 import { useRealtimeAuction } from "@/lib/hooks/use-realtime-auction";
 import {
@@ -655,8 +654,23 @@ export default function LiveAuctionStage() {
     );
   }
 
-  const player = session.currentPlayer || livePlayers[0] || MOCK_PLAYERS[0];
+  const player = session.currentPlayer || livePlayers[0];
   const leadingTeam = session.currentLeadingTeam || liveTeams[0];
+
+  if (!player) {
+    return (
+      <div className="min-h-screen bg-[#070A0D] text-slate-100 flex flex-col relative select-none">
+        <BroadcastHeader />
+        <div className="flex-1 flex items-center justify-center p-6 text-center">
+          <div className="space-y-4 max-w-md">
+            <Radio className="w-12 h-12 text-emerald-500 animate-pulse mx-auto" />
+            <h2 className="text-xl font-bold uppercase tracking-wider text-white">Live Auction Desk</h2>
+            <p className="text-xs text-slate-400">Waiting for auction lots to be initialized or selected by the auctioneer.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#070A0D] text-slate-100 flex flex-col overflow-x-hidden select-none relative">
@@ -829,25 +843,31 @@ export default function LiveAuctionStage() {
                 <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold block mb-2">
                   Leading Franchise
                 </span>
-                <div className="flex items-center justify-between p-3.5 rounded-xl bg-charcoal-950/90 border border-amber-500/30">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-xl bg-slate-800 flex items-center justify-center font-bold text-amber-400 text-lg border border-slate-700">
-                      {leadingTeam.shortCode}
+                {leadingTeam ? (
+                  <div className="flex items-center justify-between p-3.5 rounded-xl bg-charcoal-950/90 border border-amber-500/30">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-xl bg-slate-800 flex items-center justify-center font-bold text-amber-400 text-lg border border-slate-700">
+                        {leadingTeam.shortCode}
+                      </div>
+                      <div>
+                        <h4 className="font-black text-white text-base lg:text-lg">
+                          {leadingTeam.name}
+                        </h4>
+                        <p className="text-xs text-slate-400">
+                          Remaining Purse:{" "}
+                          <span className="text-emerald-400 font-mono font-semibold">
+                            {formatCurrency(leadingTeam.purse?.remainingAmount || 0)}
+                          </span>
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h4 className="font-black text-white text-base lg:text-lg">
-                        {leadingTeam.name}
-                      </h4>
-                      <p className="text-xs text-slate-400">
-                        Remaining Purse:{" "}
-                        <span className="text-emerald-400 font-mono font-semibold">
-                          {formatCurrency(leadingTeam.purse.remainingAmount)}
-                        </span>
-                      </p>
-                    </div>
+                    <Sparkles className="w-6 h-6 text-amber-400 animate-pulse" />
                   </div>
-                  <Sparkles className="w-6 h-6 text-amber-400 animate-pulse" />
-                </div>
+                ) : (
+                  <div className="p-3.5 rounded-xl bg-charcoal-950/50 border border-slate-800 text-slate-500 text-xs text-center font-mono">
+                    Awaiting opening bid from franchise
+                  </div>
+                )}
               </div>
             </div>
 

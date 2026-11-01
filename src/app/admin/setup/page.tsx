@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AdminNav } from "@/components/admin/admin-nav";
 import { AdminHeader } from "@/components/admin/admin-header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,8 +8,51 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useLeague } from "@/lib/context/league-context";
-import { Trophy, CheckCircle2, Calendar, Upload, Plus, ArrowRight } from "lucide-react";
+import { ImportModal } from "@/components/admin/import-modal";
+import {
+  Trophy,
+  CheckCircle2,
+  Calendar,
+  Upload,
+  Plus,
+  ArrowRight,
+  FileSpreadsheet,
+  FolderOpen,
+  RefreshCw,
+  AlertTriangle,
+  ShieldCheck,
+  Database,
+} from "lucide-react";
 import Link from "next/link";
+
+interface DataSourceValidationResult {
+  valid: boolean;
+  errorCode?: string;
+  error?: string;
+  sheet?: {
+    spreadsheetId: string;
+    accessible: boolean;
+    activeSheetTitle?: string;
+    availableSheets?: string[];
+    rowCount?: number;
+    columnCount?: number;
+    headers?: string[];
+  };
+  drive?: {
+    folderId: string;
+    accessible: boolean;
+    filesCount?: number;
+    sampleFiles?: string[];
+  };
+  detectedColumns?: {
+    nameCol: string;
+    photoCol: string;
+    typeCol: string;
+    teamCol: string;
+  };
+  discoveredTeams?: string[];
+  warnings?: string[];
+}
 
 export default function TournamentSetupPage() {
   const { activeLeague, leagues, switchLeague, createLeague, updateLeague } = useLeague();
@@ -23,17 +66,42 @@ export default function TournamentSetupPage() {
   const [auctionDate, setAuctionDate] = useState(activeLeague.auctionDate || "2026-11-05");
   const [auctionTime, setAuctionTime] = useState(activeLeague.auctionTime || "18:00");
   const [timezone, setTimezone] = useState(activeLeague.timezone || "Asia/Kolkata");
-  const [googleSheetsUrl, setGoogleSheetsUrl] = useState(
-    activeLeague.googleSheetsUrl || "https://docs.google.com/spreadsheets/d/1uC87Sn8KLbAHs9g1ZT63AIyIY85C7LVh-cZF8dvvgo0/edit?usp=sharing"
-  );
-  const [googleDriveFolderUrl, setGoogleDriveFolderUrl] = useState(
-    activeLeague.googleDriveFolderUrl || "https://drive.google.com/drive/folders/1MtjUStUIqnlQic13-sfML_NbPygEkSwpUsgDe7b3hHJ1GGKbP7xvSHx3MI11kTS7CgVaT2hA"
-  );
+  const [googleSheetsUrl, setGoogleSheetsUrl] = useState(activeLeague.googleSheetsUrl || "");
+  const [googleDriveFolderUrl, setGoogleDriveFolderUrl] = useState(activeLeague.googleDriveFolderUrl || "");
   const [primaryColor, setPrimaryColor] = useState(activeLeague.primaryColor || "#059669");
 
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const [showNewLeagueModal, setShowNewLeagueModal] = useState(false);
   const [newLeagueName, setNewLeagueName] = useState("");
+
+  // Data sources testing and sync states
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [validationResult, setValidationResult] = useState<DataSourceValidationResult | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [refreshingData, setRefreshingData] = useState(false);
+  const [refreshNotice, setRefreshNotice] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+
+  // Sync state if active league changes
+  useEffect(() => {
+    setName(activeLeague.name);
+    setSlug(activeLeague.slug);
+    setDescription(activeLeague.description || "");
+    setLogoUrl(activeLeague.logoUrl || "");
+    setMatchDate(activeLeague.matchDate || "2026-11-20");
+    setMatchVenue(activeLeague.matchVenue || "Perfect Pass, Falnir");
+    setAuctionDate(activeLeague.auctionDate || "2026-11-05");
+    setAuctionTime(activeLeague.auctionTime || "18:00");
+    setTimezone(activeLeague.timezone || "Asia/Kolkata");
+    setGoogleSheetsUrl(activeLeague.googleSheetsUrl || "");
+    setGoogleDriveFolderUrl(activeLeague.googleDriveFolderUrl || "");
+    setPrimaryColor(activeLeague.primaryColor || "#059669");
+    setValidationResult(null);
+    setConnectionError(null);
+    setRefreshNotice(null);
+    setRefreshError(null);
+  }, [activeLeague]);
 
   // Handle local logo file upload
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -69,6 +137,71 @@ export default function TournamentSetupPage() {
     setTimeout(() => setSavedNotice(null), 3000);
   };
 
+  const handleTestConnection = async () => {
+    if (!googleSheetsUrl.trim()) {
+      setConnectionError("Please provide a Google Sheets URL before testing.");
+      return;
+    }
+    setTestingConnection(true);
+    setConnectionError(null);
+    setValidationResult(null);
+
+    try {
+      const res = await fetch("/api/datasource/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          googleSheetsUrl: googleSheetsUrl.trim(),
+          googleDriveFolderUrl: googleDriveFolderUrl.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      setValidationResult(data);
+      if (!data.valid) {
+        setConnectionError(data.error || "Data source validation failed.");
+      }
+    } catch (err: unknown) {
+      setConnectionError(err instanceof Error ? err.message : "Network error testing connection.");
+    } finally {
+      setTestingConnection(false);
+    }
+  };
+
+  const handleRefreshRegistration = async () => {
+    if (!confirm("Are you sure you want to refresh registration data from Google Sheets? Existing un-auctioned rosters and team affiliations will be synchronized.")) {
+      return;
+    }
+    setRefreshingData(true);
+    setRefreshNotice(null);
+    setRefreshError(null);
+
+    try {
+      const res = await fetch("/api/datasource/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leagueId: activeLeague.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        if (data.errorCode === "AUCTION_ACTIVE") {
+          setRefreshError(
+            "Active Auction Guard: Data refresh is disabled while an auction is IN_PROGRESS, PAUSED, or FINISHED to protect active bids and sold player history."
+          );
+        } else {
+          setRefreshError(data.error || "Failed to refresh registration data.");
+        }
+        return;
+      }
+      setRefreshNotice(
+        `Successfully refreshed: ${data.playersCount} players, ${data.teamsCount} teams synchronized from Google Sheets.`
+      );
+    } catch (err: unknown) {
+      setRefreshError(err instanceof Error ? err.message : "Failed to communicate with refresh API.");
+    } finally {
+      setRefreshingData(false);
+    }
+  };
+
   const handleCreateNewTournament = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newLeagueName.trim()) return;
@@ -83,8 +216,8 @@ export default function TournamentSetupPage() {
       auctionDate: "2026-11-20",
       auctionTime: "18:00",
       timezone: "Asia/Kolkata",
-      googleSheetsUrl: "https://docs.google.com/spreadsheets/d/1uC87Sn8KLbAHs9g1ZT63AIyIY85C7LVh-cZF8dvvgo0/edit?usp=sharing",
-      googleDriveFolderUrl: "https://drive.google.com/drive/folders/1MtjUStUIqnlQic13-sfML_NbPygEkSwpUsgDe7b3hHJ1GGKbP7xvSHx3MI11kTS7CgVaT2hA",
+      googleSheetsUrl: "",
+      googleDriveFolderUrl: "",
       primaryColor: "#2563EB",
       secondaryColor: "#F59E0B",
     });
@@ -336,27 +469,208 @@ export default function TournamentSetupPage() {
 
             <Card className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
               <CardContent className="p-6 space-y-5">
-                <h3 className="text-sm font-bold text-slate-900 border-b border-slate-100 pb-3 flex items-center gap-2">
-                  <Upload className="w-4 h-4 text-emerald-600" />
-                  Linked External Resources
-                </h3>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                      <Database className="w-4 h-4 text-emerald-600" />
+                      Data Sources Configuration
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Configure dynamic Google Sheets and Google Drive resources for this tournament.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleTestConnection}
+                      disabled={testingConnection || !googleSheetsUrl.trim()}
+                      className="gap-1.5 border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold"
+                    >
+                      {testingConnection ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                          Testing...
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          Test Connection
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowImportModal(true)}
+                      className="gap-1.5 border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-semibold"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
+                      Import / Preview Data
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleRefreshRegistration}
+                      disabled={refreshingData}
+                      className="gap-1.5 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs font-semibold"
+                    >
+                      {refreshingData ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          Refreshing...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          Refresh Roster
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Connection Error or Notice */}
+                {connectionError && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <span className="font-bold">Connection Check Failed: </span>
+                      {connectionError}
+                    </div>
+                  </div>
+                )}
+
+                {/* Refresh Success Notice */}
+                {refreshNotice && (
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-start gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <div>{refreshNotice}</div>
+                  </div>
+                )}
+
+                {/* Refresh Guard / Error Notice */}
+                {refreshError && (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div>{refreshError}</div>
+                  </div>
+                )}
+
+                {/* Validation Diagnostic Panel */}
+                {validationResult && validationResult.valid && (
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                    <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                      Data Source Diagnostic Results
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      {/* Sheet Diagnostic */}
+                      <div className="p-3 bg-white border border-slate-200 rounded-lg space-y-1">
+                        <div className="font-semibold text-slate-800 flex items-center justify-between">
+                          <span>Google Sheets:</span>
+                          <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-300 font-bold text-[10px]">
+                            Connected
+                          </Badge>
+                        </div>
+                        <p className="text-[11px] text-slate-600">
+                          Active Tab: <span className="font-semibold text-slate-800">{validationResult.sheet?.activeSheetTitle || "Sheet 1"}</span>
+                        </p>
+                        <p className="text-[11px] text-slate-600">
+                          Rows: <span className="font-mono font-semibold">{validationResult.sheet?.rowCount ?? 0}</span> | Columns: <span className="font-mono font-semibold">{validationResult.sheet?.columnCount ?? 0}</span>
+                        </p>
+                      </div>
+
+                      {/* Drive Diagnostic */}
+                      <div className="p-3 bg-white border border-slate-200 rounded-lg space-y-1">
+                        <div className="font-semibold text-slate-800 flex items-center justify-between">
+                          <span>Google Drive Folder:</span>
+                          {validationResult.drive?.accessible ? (
+                            <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-300 font-bold text-[10px]">
+                              Connected
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="bg-slate-100 text-slate-600 border-slate-300 font-bold text-[10px]">
+                              Optional / None
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-600">
+                          Photos Found: <span className="font-mono font-semibold">{validationResult.drive?.filesCount ?? 0}</span>
+                        </p>
+                        {validationResult.drive?.sampleFiles && validationResult.drive.sampleFiles.length > 0 && (
+                          <p className="text-[10px] text-slate-400 truncate">
+                            Samples: {validationResult.drive.sampleFiles.slice(0, 3).join(", ")}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Detected Columns */}
+                    {validationResult.detectedColumns && (
+                      <div className="p-3 bg-white border border-slate-200 rounded-lg space-y-2 text-xs">
+                        <div className="font-semibold text-slate-800">Detected Registration Schema:</div>
+                        <div className="flex flex-wrap gap-2 text-[11px]">
+                          <span className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded font-medium text-slate-700">
+                            Name: <span className="font-bold text-slate-900">{validationResult.detectedColumns.nameCol}</span>
+                          </span>
+                          <span className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded font-medium text-slate-700">
+                            Photo: <span className="font-bold text-slate-900">{validationResult.detectedColumns.photoCol}</span>
+                          </span>
+                          <span className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded font-medium text-slate-700">
+                            Type: <span className="font-bold text-slate-900">{validationResult.detectedColumns.typeCol}</span>
+                          </span>
+                          <span className="bg-slate-100 border border-slate-200 px-2 py-0.5 rounded font-medium text-slate-700">
+                            Affiliation / Team: <span className="font-bold text-slate-900">{validationResult.detectedColumns.teamCol || "None"}</span>
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Discovered Teams */}
+                    {validationResult.discoveredTeams && validationResult.discoveredTeams.length > 0 && (
+                      <div className="p-3 bg-white border border-slate-200 rounded-lg space-y-1.5 text-xs">
+                        <div className="font-semibold text-slate-800">
+                          Discovered Franchises ({validationResult.discoveredTeams.length}):
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {validationResult.discoveredTeams.map((teamName, i) => (
+                            <Badge key={i} variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-200 text-[10px] font-semibold">
+                              {teamName}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="space-y-4">
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-slate-700">Google Sheets Registration URL</label>
+                    <label className="text-xs font-semibold text-slate-700">
+                      Google Sheets Registration URL * <span className="text-red-500">(Required)</span>
+                    </label>
                     <Input
                       value={googleSheetsUrl}
                       onChange={(e) => setGoogleSheetsUrl(e.target.value)}
                       placeholder="https://docs.google.com/spreadsheets/d/..."
                       className="bg-white border-slate-300 font-mono text-xs"
+                      required
                     />
                     <p className="text-[11px] text-slate-500">
-                      The default reference spreadsheet contains players, icon players, and team owners.
+                      Google Sheet containing player registrations, icons, owners, and team affiliations.
                     </p>
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-slate-700">Google Drive Photographs Folder URL</label>
+                    <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                      <FolderOpen className="w-3.5 h-3.5 text-slate-500" />
+                      Google Drive Photographs Folder URL <span className="text-slate-400 font-normal">(Optional)</span>
+                    </label>
                     <Input
                       value={googleDriveFolderUrl}
                       onChange={(e) => setGoogleDriveFolderUrl(e.target.value)}
@@ -364,7 +678,7 @@ export default function TournamentSetupPage() {
                       className="bg-white border-slate-300 font-mono text-xs"
                     />
                     <p className="text-[11px] text-slate-500">
-                      Folder containing player, owner, and icon player photos matched during data sync.
+                      Public or authorized Google Drive folder containing entity photos matched by filename.
                     </p>
                   </div>
                 </div>
@@ -476,6 +790,15 @@ export default function TournamentSetupPage() {
           </div>
         </div>
       )}
+
+      {/* Dynamic Import & Preview Modal */}
+      <ImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        defaultSheetUrl={googleSheetsUrl}
+        defaultDriveUrl={googleDriveFolderUrl}
+        activeLeagueId={activeLeague.id}
+      />
     </div>
   );
 }
