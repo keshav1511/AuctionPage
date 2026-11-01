@@ -17,9 +17,9 @@ export default function AdminReportsPage() {
     const team = teams.find((t) => t.name === teamName);
     const squadPlayers = players.filter((p) => p.soldToTeamId === team?.id);
 
-    let csv = "Registration No,Player Name,Category,Role,Final Price (INR)\n";
+    let csv = "Registration No,Player Name,Role,Final Price (INR)\n";
     squadPlayers.forEach((p) => {
-      csv += `${p.registrationNo},"${p.fullName}",${p.category},${p.primaryRole},${p.soldPrice || p.basePrice}\n`;
+      csv += `${p.registrationNo},"${p.fullName}",${p.primaryRole},${p.soldPrice || p.basePrice}\n`;
     });
 
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });

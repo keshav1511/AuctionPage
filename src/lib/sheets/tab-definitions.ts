@@ -273,7 +273,7 @@ export function serializePlayer(player: Player): string[] {
     player.seasonId || "",
     player.registrationNo || "",
     player.fullName || "",
-    player.category || "SILVER",
+    player.category || "",
     player.primaryRole || "BATSMAN",
     player.battingStyle || "Right Hand Bat",
     player.bowlingStyle || "Right Arm Medium",
@@ -307,7 +307,7 @@ export function deserializePlayer(row: (string | undefined)[]): Player | null {
     seasonId: row[1] || "",
     registrationNo: row[2] || "",
     fullName: row[3] || "",
-    category: (row[4] as PlayerCategory) || "SILVER",
+    category: (row[4] as PlayerCategory) || undefined,
     primaryRole: (row[5] as PlayerRole) || "BATSMAN",
     battingStyle: row[6] || "Right Hand Bat",
     bowlingStyle: row[7] || "Right Arm Medium",
@@ -503,7 +503,7 @@ export interface PurchaseRecord {
   seasonId: string;
   playerId: string;
   playerName: string;
-  playerCategory: PlayerCategory;
+  playerCategory?: PlayerCategory;
   playerRole: PlayerRole;
   teamId: string;
   teamName: string;
@@ -518,7 +518,7 @@ export function serializePurchase(purchase: PurchaseRecord): string[] {
     purchase.seasonId || "",
     purchase.playerId || "",
     purchase.playerName || "",
-    purchase.playerCategory || "SILVER",
+    purchase.playerCategory || "",
     purchase.playerRole || "BATSMAN",
     purchase.teamId || "",
     purchase.teamName || "",
@@ -536,7 +536,7 @@ export function deserializePurchase(row: (string | undefined)[]): PurchaseRecord
     seasonId: row[1] || "",
     playerId: row[2] || "",
     playerName: row[3] || "",
-    playerCategory: (row[4] as PlayerCategory) || "SILVER",
+    playerCategory: (row[4] as PlayerCategory) || undefined,
     playerRole: (row[5] as PlayerRole) || "BATSMAN",
     teamId: row[6] || "",
     teamName: row[7] || "",

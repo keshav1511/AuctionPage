@@ -53,12 +53,43 @@ export async function callAppsScript<T = unknown>(
       cache: "no-store",
     });
 
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "Unknown network error");
-      throw new Error(`Apps Script responded with HTTP ${res.status}: ${errText}`);
+    const contentType = res.headers.get("content-type") || "";
+    const resText = await res.text().catch(() => "");
+
+    // 1. Check for HTTP 413 Request Entity Too Large
+    if (
+      res.status === 413 ||
+      resText.toLowerCase().includes("request entity too large") ||
+      resText.startsWith("Request En")
+    ) {
+      throw new Error(
+        `Apps Script rejected payload: Request Entity Too Large (HTTP 413). Please reduce image or payload size.`
+      );
     }
 
-    const json = (await res.json()) as AppsScriptResponse<T>;
+    if (!res.ok) {
+      const cleanSnippet = resText.replace(/<[^>]*>?/gm, " ").trim().substring(0, 200);
+      throw new Error(`Apps Script responded with HTTP ${res.status}: ${cleanSnippet || "Unknown error"}`);
+    }
+
+    // 2. Safe JSON Parsing
+    if (!contentType.includes("application/json") && !resText.trim().startsWith("{")) {
+      const cleanSnippet = resText.replace(/<[^>]*>?/gm, " ").trim().substring(0, 200);
+      throw new Error(
+        `Apps Script returned non-JSON response (HTTP ${res.status}): ${cleanSnippet || "Empty response"}`
+      );
+    }
+
+    let json: AppsScriptResponse<T>;
+    try {
+      json = JSON.parse(resText) as AppsScriptResponse<T>;
+    } catch {
+      const cleanSnippet = resText.replace(/<[^>]*>?/gm, " ").trim().substring(0, 200);
+      throw new Error(
+        `Failed to parse Apps Script response as JSON (HTTP ${res.status}): ${cleanSnippet}`
+      );
+    }
+
     if (!json.success) {
       throw new Error(json.error || `Apps Script action "${action}" failed without specific error`);
     }

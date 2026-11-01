@@ -9,9 +9,9 @@ import { Progress } from "@/components/ui/progress";
 import {
   formatCurrency,
   formatRole,
-  getCategoryBadgeColor,
   getRoleBadgeColor,
 } from "@/lib/utils";
+import { getTeamParticipantCounts, formatTeamParticipantBreakdown } from "@/lib/auction/team-size-calculator";
 import { useLeague } from "@/lib/context/league-context";
 import { useRealtimeAuction } from "@/lib/hooks/use-realtime-auction";
 import {
@@ -217,12 +217,9 @@ export default function LiveAuctionStage() {
                 </div>
               )}
 
-              {/* Category / Role Badge at top left of photo */}
+              {/* Role Badge at top left of photo */}
               <div className="absolute top-3 left-3 z-10 flex flex-col gap-1">
-                <span className={`px-2.5 py-1 rounded-lg text-xs font-black shadow-md ${getCategoryBadgeColor(annPlayer?.category || "SILVER")}`}>
-                  {annPlayer?.category || "SILVER"}
-                </span>
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-black/70 text-slate-300 backdrop-blur-xs">
+                <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-black/70 text-slate-200 backdrop-blur-xs border border-white/10 shadow-md">
                   {formatRole(annPlayer?.primaryRole || "BATSMAN")}
                 </span>
               </div>
@@ -487,10 +484,7 @@ export default function LiveAuctionStage() {
                         </h4>
 
                         <div className="flex items-center gap-1 my-1">
-                          <span className={`px-1.5 py-0.2 rounded text-[8px] font-bold ${getCategoryBadgeColor(p.category)}`}>
-                            {p.category}
-                          </span>
-                          <span className="text-[9px] text-slate-400 truncate max-w-[70px]">
+                          <span className="text-[10px] text-slate-400 font-medium truncate">
                             {formatRole(p.primaryRole)}
                           </span>
                         </div>
@@ -623,9 +617,6 @@ export default function LiveAuctionStage() {
                     </div>
 
                     <div className="flex items-center gap-1.5 mb-1">
-                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${getCategoryBadgeColor(p.category)}`}>
-                        {p.category}
-                      </span>
                       <span className="text-[10px] text-slate-400 font-medium truncate">
                         {formatRole(p.primaryRole)}
                       </span>
@@ -732,14 +723,6 @@ export default function LiveAuctionStage() {
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <Badge
-                  variant="gold"
-                  className={`text-xs px-3 py-1 font-bold ${getCategoryBadgeColor(
-                    player.category
-                  )}`}
-                >
-                  {player.category}
-                </Badge>
                 <Badge
                   variant="outline"
                   className={`text-xs px-3 py-1 font-semibold ${getRoleBadgeColor(
@@ -952,6 +935,10 @@ export default function LiveAuctionStage() {
               {liveTeams.map((t) => {
                 const percentSpent = (t.purse.spentAmount / t.purse.totalBudget) * 100;
                 const isLeading = t.id === leadingTeam.id;
+                const teamSoldPlayers = livePlayers.filter(
+                  (p) => p.status === "SOLD" && p.soldToTeamId === t.id
+                );
+                const counts = getTeamParticipantCounts(t, teamSoldPlayers.length);
 
                 return (
                   <div
@@ -969,8 +956,11 @@ export default function LiveAuctionStage() {
                           {t.name}
                         </span>
                       </div>
-                      <span className="text-[10px] font-mono text-slate-400">
-                        {t.squadCount}/{t.purse.minPlayers || 8}
+                      <span
+                        className="text-[10px] font-mono text-slate-400"
+                        title={formatTeamParticipantBreakdown(counts)}
+                      >
+                        {counts.totalParticipants}/{t.purse.minPlayers || 8}
                       </span>
                     </div>
 

@@ -9,6 +9,7 @@ import { Progress } from "@/components/ui/progress";
 import { formatCurrency } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
 import { useRealtimeAuction } from "@/lib/hooks/use-realtime-auction";
+import { getTeamParticipantCounts } from "@/lib/auction/team-size-calculator";
 import { Users } from "lucide-react";
 
 export default function TeamsPage() {
@@ -21,6 +22,7 @@ export default function TeamsPage() {
   const activeId = selectedTeamId || teams[0]?.id || "";
   const selectedTeam = teams.find((t) => t.id === activeId) || teams[0];
   const acquiredPlayers = selectedTeam ? players.filter((p) => p.soldToTeamId === selectedTeam.id) : [];
+  const selectedTeamCounts = selectedTeam ? getTeamParticipantCounts(selectedTeam, acquiredPlayers.length) : null;
 
   return (
     <div className="min-h-screen bg-[#090D10] text-slate-100 flex flex-col">
@@ -55,6 +57,10 @@ export default function TeamsPage() {
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-8">
               {teams.map((team) => {
                 const isSelected = team.id === (selectedTeam?.id || activeId);
+                const teamCounts = getTeamParticipantCounts(
+                  team,
+                  players.filter((p) => p.soldToTeamId === team.id).length
+                );
                 return (
                   <button
                     key={team.id}
@@ -77,7 +83,7 @@ export default function TeamsPage() {
                       {formatCurrency(team.purse?.remainingAmount || 0, true)}
                     </div>
                     <div className="text-[10px] text-slate-400">
-                      {(team.squadCount ?? ((team.ownerName ? 1 : 0) + (team.iconPlayerName ? 1 : 0) + players.filter((p) => p.soldToTeamId === team.id).length))} / {team.purse?.minPlayers || 8} Players
+                      {teamCounts.totalParticipants} / {team.purse?.minPlayers || 8} Participants
                     </div>
                   </button>
                 );
@@ -158,7 +164,7 @@ export default function TeamsPage() {
                       Signed Auction Roster ({acquiredPlayers.length})
                     </h3>
                     <Badge variant="outline" className="font-mono text-xs">
-                      Total Squad: {((selectedTeam?.ownerName ? 1 : 0) + (selectedTeam?.iconPlayerName ? 1 : 0) + acquiredPlayers.length)} / {selectedTeam?.purse?.minPlayers || 8}
+                      Total Squad: {selectedTeamCounts?.totalParticipants ?? 0} / {selectedTeam?.purse?.minPlayers || 8} ({selectedTeamCounts?.registeredPlayersCount ?? 0} players{selectedTeamCounts?.hasOwner ? " + 1 owner" : ""}{selectedTeamCounts?.hasIcon ? " + 1 icon" : ""})
                     </Badge>
                   </div>
 
@@ -193,7 +199,7 @@ export default function TeamsPage() {
                               <div>
                                 <h4 className="font-bold text-white text-sm">{p.fullName}</h4>
                                 <p className="text-xs text-slate-400">
-                                  {p.category} • {p.primaryRole}
+                                  {p.primaryRole}
                                 </p>
                               </div>
                             </div>

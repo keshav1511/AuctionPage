@@ -7,10 +7,11 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { formatRole, getCategoryBadgeColor } from "@/lib/utils";
+import { formatRole } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
 import { ImportModal } from "@/components/admin/import-modal";
-import { Player, PlayerCategory, PlayerRole } from "@/types";
+import { Player, PlayerRole } from "@/types";
+import { uploadImageSafely } from "@/lib/media/image-upload-client";
 import {
   matchEntitiesWithDriveFiles,
   MatchEntity,
@@ -30,7 +31,6 @@ import {
   Award,
   Users,
   ArrowRight,
-  Filter,
   Edit2,
   Trash2,
   Save,
@@ -39,23 +39,10 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
-// Upload helper communicating with protected /api/media/upload -> Apps Script DriveApp
+// Upload helper communicating with protected /api/media/upload -> Apps Script DriveApp with client compression & safe parsing
 async function uploadImageToDrive(file: File, folder: "players" | "teams" | "league" = "players"): Promise<string> {
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("folder", folder);
-
-  const res = await fetch("/api/media/upload", {
-    method: "POST",
-    body: formData,
-  });
-
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || "Failed to upload image");
-  }
-
-  return data.url;
+  const result = await uploadImageSafely(file, folder);
+  return result.url;
 }
 
 function getPlayerInitials(name: string): string {
@@ -69,7 +56,6 @@ export default function AdminPlayersPage() {
   const { activeLeague, players, setPlayersForActiveLeague, updatePlayer, teams, updateTeam } = useLeague();
 
   const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState<string>("ALL");
   const [activeTab, setActiveTab] = useState<"directory" | "photo_matching">("directory");
   const [photoSubTab, setPhotoSubTab] = useState<"players" | "owners" | "icons">("players");
 
@@ -90,7 +76,6 @@ export default function AdminPlayersPage() {
   const [editingPlayer, setEditingPlayer] = useState<Player | null>(null);
   const [editFullName, setEditFullName] = useState("");
   const [editRegNo, setEditRegNo] = useState("");
-  const [editCategory, setEditCategory] = useState<PlayerCategory>("SILVER");
   const [editRole, setEditRole] = useState<PlayerRole>("ALL_ROUNDER");
   const [editBasePrice, setEditBasePrice] = useState<number>(2000);
   const [editPhotoUrl, setEditPhotoUrl] = useState<string>("");
@@ -98,11 +83,10 @@ export default function AdminPlayersPage() {
 
   // Filtered Players for Directory Tab
   const filteredPlayers = players.filter((p) => {
-    const matchesSearch =
+    return (
       p.fullName.toLowerCase().includes(search.toLowerCase()) ||
-      p.registrationNo.toLowerCase().includes(search.toLowerCase());
-    const matchesCategory = categoryFilter === "ALL" || p.category === categoryFilter;
-    return matchesSearch && matchesCategory;
+      p.registrationNo.toLowerCase().includes(search.toLowerCase())
+    );
   });
 
   // Handle data import from Sheets or Excel (append or replace)
@@ -251,7 +235,6 @@ export default function AdminPlayersPage() {
     setEditingPlayer(player);
     setEditFullName(player.fullName);
     setEditRegNo(player.registrationNo);
-    setEditCategory(player.category);
     setEditRole(player.primaryRole);
     setEditBasePrice(player.basePriceOverride || player.basePrice || 2000);
     setEditPhotoUrl(player.photoUrl || "");
@@ -277,7 +260,6 @@ export default function AdminPlayersPage() {
     updatePlayer(editingPlayer.id, {
       fullName: editFullName.trim(),
       registrationNo: editRegNo.trim(),
-      category: editCategory,
       primaryRole: editRole,
       basePrice: editBasePrice,
       basePriceOverride: editBasePrice,
@@ -580,22 +562,6 @@ export default function AdminPlayersPage() {
                         Save All Prices ({unsavedCount})
                       </Button>
                     )}
-
-                    <div className="flex items-center gap-2">
-                      <Filter className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <select
-                        value={categoryFilter}
-                        onChange={(e) => setCategoryFilter(e.target.value)}
-                        className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-700 font-medium focus:outline-none"
-                      >
-                        <option value="ALL">All Categories</option>
-                        <option value="ICON">Icon Players</option>
-                        <option value="PLATINUM">Platinum</option>
-                        <option value="GOLD">Gold</option>
-                        <option value="SILVER">Silver</option>
-                        <option value="EMERGING">Emerging</option>
-                      </select>
-                    </div>
                   </div>
                 </div>
 
@@ -605,7 +571,6 @@ export default function AdminPlayersPage() {
                     <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
                       <tr>
                         <th className="p-3 pl-4">Player</th>
-                        <th className="p-3">Category</th>
                         <th className="p-3">Playing Role</th>
                         <th className="p-3">Base Price (₹)</th>
                         <th className="p-3">Photo Status</th>
@@ -638,12 +603,6 @@ export default function AdminPlayersPage() {
                                   <div className="font-mono text-[10px] text-slate-400">{player.registrationNo}</div>
                                 </div>
                               </div>
-                            </td>
-
-                            <td className="p-3">
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getCategoryBadgeColor(player.category)}`}>
-                                {player.category}
-                              </span>
                             </td>
 
                             <td className="p-3 text-slate-600 font-medium">
@@ -999,35 +958,18 @@ export default function AdminPlayersPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700">Category</label>
-                  <select
-                    value={editCategory}
-                    onChange={(e) => setEditCategory(e.target.value as PlayerCategory)}
-                    className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 font-medium focus:outline-none"
-                  >
-                    <option value="ICON">ICON</option>
-                    <option value="PLATINUM">PLATINUM</option>
-                    <option value="GOLD">GOLD</option>
-                    <option value="SILVER">SILVER</option>
-                    <option value="EMERGING">EMERGING</option>
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700">Playing Role</label>
-                  <select
-                    value={editRole}
-                    onChange={(e) => setEditRole(e.target.value as PlayerRole)}
-                    className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 font-medium focus:outline-none"
-                  >
-                    <option value="BATSMAN">BATSMAN</option>
-                    <option value="BOWLER">BOWLER</option>
-                    <option value="ALL_ROUNDER">ALL_ROUNDER</option>
-                    <option value="WICKET_KEEPER">WICKET_KEEPER</option>
-                  </select>
-                </div>
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Playing Role</label>
+                <select
+                  value={editRole}
+                  onChange={(e) => setEditRole(e.target.value as PlayerRole)}
+                  className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 font-medium focus:outline-none"
+                >
+                  <option value="BATSMAN">BATSMAN</option>
+                  <option value="BOWLER">BOWLER</option>
+                  <option value="ALL_ROUNDER">ALL_ROUNDER</option>
+                  <option value="WICKET_KEEPER">WICKET_KEEPER</option>
+                </select>
               </div>
 
               <div className="space-y-1">

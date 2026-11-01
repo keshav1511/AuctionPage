@@ -504,7 +504,7 @@ function handleSavePlayers(ss, data) {
 // ------------------------------------------------------------------------------
 function handleUploadImage(ss, data) {
   try {
-    const { base64Data, fileName, mimeType, folderId } = data;
+    const { base64Data, fileName, mimeType, folderId, subfolder } = data;
     if (!base64Data) {
       return jsonResponse({ success: false, error: "Missing base64Data" }, 400);
     }
@@ -524,8 +524,17 @@ function handleUploadImage(ss, data) {
         const sheetFile = DriveApp.getFileById(ss.getId());
         const parents = sheetFile.getParents();
         const parentFolder = parents.hasNext() ? parents.next() : DriveApp.getRootFolder();
-        const subfolders = parentFolder.getFoldersByName("Auction_Images");
-        folder = subfolders.hasNext() ? subfolders.next() : parentFolder.createFolder("Auction_Images");
+        const rootFolders = parentFolder.getFoldersByName("Auction_Images");
+        const rootImgFolder = rootFolders.hasNext() ? rootFolders.next() : parentFolder.createFolder("Auction_Images");
+
+        // Target subfolder if specified (e.g. players, teams, league)
+        const subName = (subfolder && typeof subfolder === "string") ? subfolder.trim().toLowerCase() : "";
+        if (subName === "players" || subName === "teams" || subName === "league") {
+          const subQuery = rootImgFolder.getFoldersByName(subName);
+          folder = subQuery.hasNext() ? subQuery.next() : rootImgFolder.createFolder(subName);
+        } else {
+          folder = rootImgFolder;
+        }
       } catch (driveErr) {
         folder = DriveApp.getRootFolder();
       }

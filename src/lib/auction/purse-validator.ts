@@ -4,6 +4,7 @@
 // ==============================================================================
 
 import { Team, Player, AuctionRules, PlayerCategory, TeamCategoryLimits } from "@/types";
+import { getTeamParticipantCounts, formatTeamParticipantBreakdown } from "./team-size-calculator";
 
 export interface PurseReserveCalculationParams {
   remainingPurse: number;
@@ -141,12 +142,19 @@ export function analyzeTeamBiddingEligibility(
     allPurchasedPlayersForTeam = [],
   } = options;
 
-  // Determine effective total squad size (pre-assigned owner & icon + auction acquisitions)
-  const preAssignedCount = (team.ownerName ? 1 : 0) + (team.iconPlayerName ? 1 : 0);
-  const playersPurchased =
-    allPurchasedPlayersForTeam.length > 0
-      ? preAssignedCount + allPurchasedPlayersForTeam.length
-      : (team.squadCount || preAssignedCount);
+  // Determine effective total participants:
+  // Total Team Size = Registered Players + Team Owner (1 if assigned) + Team Icon (1 if assigned)
+  const registeredCount =
+    allPurchasedPlayersForTeam !== undefined
+      ? allPurchasedPlayersForTeam.length
+      : Math.max(
+          0,
+          (team.squadCount || 0) - ((team.ownerName ? 1 : 0) + (team.iconPlayerName ? 1 : 0))
+        );
+
+  const participantCounts = getTeamParticipantCounts(team, registeredCount);
+  const totalParticipants = participantCounts.totalParticipants;
+  const breakdown = formatTeamParticipantBreakdown(participantCounts);
 
   // Team remaining purse
   const remainingPurse = team.purse?.remainingAmount ?? 5000000;
@@ -167,7 +175,7 @@ export function analyzeTeamBiddingEligibility(
   const reserveResult = calculatePurseReserve({
     remainingPurse,
     minimumSquadSize,
-    playersPurchased,
+    playersPurchased: totalParticipants,
     minimumBasePrice,
     categoryMinimumBasePrices: rules.categoryMinimumBasePrices,
     teamCategoryLimits: team.categoryLimits,
@@ -175,8 +183,8 @@ export function analyzeTeamBiddingEligibility(
     currentPlayerCategory: currentPlayer?.category,
   });
 
-  const remainingPlayersRequired = Math.max(0, minimumSquadSize - playersPurchased);
-  const isCompleted = playersPurchased >= minimumSquadSize;
+  const remainingPlayersRequired = Math.max(0, minimumSquadSize - totalParticipants);
+  const isCompleted = totalParticipants >= minimumSquadSize;
 
   // Evaluate Eligibility
   let isEligibleToBid = true;
@@ -184,13 +192,13 @@ export function analyzeTeamBiddingEligibility(
 
   if (isCompleted) {
     isEligibleToBid = false;
-    ineligibilityReason = `Squad completed (${playersPurchased}/${minimumSquadSize} players required)`;
+    ineligibilityReason = `Squad completed (${totalParticipants}/${minimumSquadSize} participants). Current count: ${breakdown}`;
   } else if (isCurrentLeadingTeam) {
     isEligibleToBid = false;
     ineligibilityReason = "Already leading current highest bid";
-  } else if (playersPurchased >= maxSquadSize) {
+  } else if (totalParticipants >= maxSquadSize) {
     isEligibleToBid = false;
-    ineligibilityReason = `Squad limit reached (${playersPurchased}/${maxSquadSize} players)`;
+    ineligibilityReason = `Squad limit reached (${totalParticipants}/${maxSquadSize} participants). Current count: ${breakdown}`;
   } else if (remainingPurse < reserveResult.requiredReserve) {
     // Example D condition: Team cannot afford required reserve
     isEligibleToBid = false;
@@ -198,22 +206,6 @@ export function analyzeTeamBiddingEligibility(
   } else if (reserveResult.maximumBidAllowed < nextBidAmount) {
     isEligibleToBid = false;
     ineligibilityReason = `Maximum permitted bid (₹${reserveResult.maximumBidAllowed.toLocaleString()}) is below next valid bid (₹${nextBidAmount.toLocaleString()})`;
-  } else if (currentPlayer?.category && team.categoryLimits) {
-    // Check category maximum caps
-    const cat = currentPlayer.category;
-    if (cat === "ICON" && team.categoryLimits.max_icon) {
-      const currentIcons = allPurchasedPlayersForTeam.filter((p) => p.category === "ICON").length;
-      if (currentIcons >= team.categoryLimits.max_icon) {
-        isEligibleToBid = false;
-        ineligibilityReason = `Maximum ICON player cap reached (${currentIcons}/${team.categoryLimits.max_icon})`;
-      }
-    } else if (cat === "PLATINUM" && team.categoryLimits.max_platinum) {
-      const currentPlats = allPurchasedPlayersForTeam.filter((p) => p.category === "PLATINUM").length;
-      if (currentPlats >= team.categoryLimits.max_platinum) {
-        isEligibleToBid = false;
-        ineligibilityReason = `Maximum PLATINUM player cap reached (${currentPlats}/${team.categoryLimits.max_platinum})`;
-      }
-    }
   }
 
   return {
@@ -261,10 +253,18 @@ export function validateBidEligibility(
     };
   }
 
+  if (analysis.isCompleted) {
+    return {
+      valid: false,
+      error: `Squad Completed: ${team.name} has already completed its required squad (${analysis.playersPurchased}/${analysis.requiredSquadSize} participants). ${analysis.ineligibilityReason || ""}`.trim(),
+      analysis,
+    };
+  }
+
   if (analysis.playersPurchased >= (team.purse?.maxPlayers || 18)) {
     return {
       valid: false,
-      error: `Squad Limit Reached: ${team.name} already has maximum squad size (${analysis.playersPurchased} players).`,
+      error: `Squad Limit Reached: ${team.name} already has maximum squad size (${analysis.playersPurchased} participants). ${analysis.ineligibilityReason || ""}`.trim(),
       analysis,
     };
   }

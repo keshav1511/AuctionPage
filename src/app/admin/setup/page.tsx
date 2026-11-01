@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useLeague } from "@/lib/context/league-context";
 import { ImportModal } from "@/components/admin/import-modal";
+import { uploadImageSafely } from "@/lib/media/image-upload-client";
 import {
   Trophy,
   CheckCircle2,
@@ -109,7 +110,7 @@ export default function TournamentSetupPage() {
     setRefreshError(null);
   }, [activeLeague]);
 
-  // Handle local logo file upload via /api/media/upload -> Google Drive
+  // Handle local logo file upload via /api/media/upload -> Google Drive with compression
   const handleUploadDriveMedia = async (
     file: File,
     setter: (url: string) => void,
@@ -117,21 +118,8 @@ export default function TournamentSetupPage() {
   ) => {
     setLoading(true);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("folder", "league");
-
-      const res = await fetch("/api/media/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Failed to upload image");
-      }
-
-      setter(data.url);
+      const result = await uploadImageSafely(file, "league");
+      setter(result.url);
       setSavedNotice("Uploaded image to Google Drive.");
       setTimeout(() => setSavedNotice(null), 3000);
     } catch (err) {

@@ -3,6 +3,7 @@ import { getAdminSessionFromRequest } from "@/lib/auth/admin-auth";
 import { callAppsScript, isAppsScriptConfigured } from "@/lib/sheets/apps-script-client";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 export async function POST(req: NextRequest) {
   try {
@@ -19,6 +20,7 @@ export async function POST(req: NextRequest) {
     let fileName = "";
     let mimeType = "image/jpeg";
     let folderId = "";
+    let subfolder = "players";
 
     const contentType = req.headers.get("content-type") || "";
 
@@ -26,6 +28,10 @@ export async function POST(req: NextRequest) {
       const formData = await req.formData();
       const file = formData.get("file") as File | null;
       folderId = (formData.get("folderId") as string) || "";
+      const rawFolder = (formData.get("folder") as string) || "";
+      if (rawFolder === "players" || rawFolder === "teams" || rawFolder === "league") {
+        subfolder = rawFolder;
+      }
 
       if (!file) {
         return NextResponse.json(
@@ -44,6 +50,9 @@ export async function POST(req: NextRequest) {
       fileName = json.fileName || json.name || "image.jpg";
       mimeType = json.mimeType || "image/jpeg";
       folderId = json.folderId || "";
+      if (json.folder === "players" || json.folder === "teams" || json.folder === "league") {
+        subfolder = json.folder;
+      }
     }
 
     if (!base64Data) {
@@ -75,6 +84,7 @@ export async function POST(req: NextRequest) {
       fileName,
       mimeType,
       folderId: folderId || undefined,
+      subfolder,
     });
 
     if (!result || !result.fileId || !result.url) {

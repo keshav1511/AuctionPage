@@ -5,7 +5,7 @@ import Image from "next/image";
 import { PublicNav } from "@/components/public/public-nav";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { formatCurrency, formatRole, getCategoryBadgeColor } from "@/lib/utils";
+import { formatCurrency, formatRole } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
 import { useRealtimeAuction } from "@/lib/hooks/use-realtime-auction";
 import { Search, CheckCircle2, XCircle, Clock } from "lucide-react";
@@ -18,7 +18,6 @@ export default function ResultsPage() {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
-  const [categoryFilter, setCategoryFilter] = useState<string>("ALL");
 
   const filteredPlayers = players.filter((player) => {
     const matchesSearch =
@@ -26,9 +25,8 @@ export default function ResultsPage() {
       player.registrationNo.toLowerCase().includes(search.toLowerCase());
 
     const matchesStatus = statusFilter === "ALL" || player.status === statusFilter;
-    const matchesCategory = categoryFilter === "ALL" || player.category === categoryFilter;
 
-    return matchesSearch && matchesStatus && matchesCategory;
+    return matchesSearch && matchesStatus;
   });
 
   const getTeamName = (teamId?: string) => {
@@ -66,7 +64,7 @@ export default function ResultsPage() {
             />
           </div>
 
-          <div className="sm:col-span-3">
+          <div className="sm:col-span-6">
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
@@ -78,21 +76,6 @@ export default function ResultsPage() {
               <option value="AVAILABLE">Upcoming Lots</option>
             </select>
           </div>
-
-          <div className="sm:col-span-3">
-            <select
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-              className="w-full h-10 px-3 rounded-lg bg-charcoal-900 border border-slate-800 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            >
-              <option value="ALL">All Categories</option>
-              <option value="ICON">Icon Pool</option>
-              <option value="PLATINUM">Platinum Pool</option>
-              <option value="GOLD">Gold Pool</option>
-              <option value="SILVER">Silver Pool</option>
-              <option value="EMERGING">Emerging Pool</option>
-            </select>
-          </div>
         </div>
 
         {/* Catalog Table */}
@@ -102,7 +85,7 @@ export default function ResultsPage() {
               <thead>
                 <tr className="border-b border-slate-800 bg-charcoal-950/80 text-xs text-slate-400 font-semibold uppercase tracking-wider">
                   <th className="py-4 px-6">Player</th>
-                  <th className="py-4 px-4">Category & Role</th>
+                  <th className="py-4 px-4">Playing Role</th>
                   <th className="py-4 px-4">Base Price</th>
                   <th className="py-4 px-4">Status</th>
                   <th className="py-4 px-6 text-right">Winning Price / Team</th>
@@ -137,17 +120,9 @@ export default function ResultsPage() {
                     </td>
 
                     <td className="py-4 px-4">
-                      <div className="flex items-center gap-2">
-                        <Badge
-                          variant="gold"
-                          className={`text-[10px] ${getCategoryBadgeColor(player.category)}`}
-                        >
-                          {player.category}
-                        </Badge>
-                        <span className="text-xs text-slate-300">
-                          {formatRole(player.primaryRole)}
-                        </span>
-                      </div>
+                      <span className="text-xs text-slate-300 font-medium">
+                        {formatRole(player.primaryRole)}
+                      </span>
                     </td>
 
                     <td className="py-4 px-4 font-mono text-slate-300">

@@ -29,6 +29,7 @@ import {
 } from "@/lib/sheets/google-sheets-repository";
 import { AuctionStateRow, PurchaseRecord, AuditLogEntry } from "@/lib/sheets/tab-definitions";
 import { validateBidEligibility } from "@/lib/auction/purse-validator";
+import { getTeamParticipantCounts, formatTeamParticipantBreakdown } from "@/lib/auction/team-size-calculator";
 import {
   detectRound1Completion,
   getEligibleRound2Players,
@@ -525,12 +526,23 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
           (p) => p.status === "SOLD" && p.soldToTeamId === team.id
         );
 
-        // Module 1: Enforce team squad completion restriction server-side
+        // Enforce team squad completion and limit restriction using total participants:
+        // Total Team Size = Registered Players + Team Owner (1 if assigned) + Team Icon (1 if assigned)
+        const counts = getTeamParticipantCounts(team, teamPurchasedPlayers.length);
         const minSquadSize = team.purse?.minPlayers || rules.minimumSquadSize || 15;
-        if (teamPurchasedPlayers.length >= minSquadSize) {
+        const maxSquadSize = team.purse?.maxPlayers || 18;
+
+        if (counts.totalParticipants >= minSquadSize) {
           return {
             success: false,
-            error: `Team ${team.name} has already completed its required squad (${teamPurchasedPlayers.length}/${minSquadSize} players required)`,
+            error: `Team ${team.name} has already completed its required squad (${counts.totalParticipants}/${minSquadSize} participants). Current count: ${formatTeamParticipantBreakdown(counts)}.`,
+          };
+        }
+
+        if (counts.totalParticipants >= maxSquadSize) {
+          return {
+            success: false,
+            error: `Squad limit reached (${counts.totalParticipants}/${maxSquadSize} participants). Current count: ${formatTeamParticipantBreakdown(counts)}.`,
           };
         }
 
@@ -825,7 +837,11 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
             const currentSpent = t.purse?.spentAmount || 0;
             const newSpent = currentSpent + finalPrice;
             const newRemaining = (t.purse?.totalBudget || 5000000) - newSpent;
-            const newSquadCount = (t.squadCount || 0) + 1;
+            const currentPurchased = players.filter(
+              (p) => p.status === "SOLD" && p.soldToTeamId === t.id
+            ).length;
+            const newCounts = getTeamParticipantCounts(t, currentPurchased + 1);
+            const newSquadCount = newCounts.totalParticipants;
             const minPlayers = t.purse?.minPlayers || rules.minimumSquadSize || 15;
             const minBasePrice =
               rules.minimumBasePrice ||

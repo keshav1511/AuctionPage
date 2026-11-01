@@ -4,7 +4,7 @@ import { AdminNav } from "@/components/admin/admin-nav";
 import { AdminHeader } from "@/components/admin/admin-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { formatCurrency, getCategoryBadgeColor } from "@/lib/utils";
+import { formatCurrency, formatRole } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
 import { CheckCircle2, XCircle, RotateCcw, Award, User } from "lucide-react";
 
@@ -72,7 +72,7 @@ export default function AdminResultsPage() {
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
                 <tr>
                   <th className="p-3 pl-4">Player</th>
-                  <th className="p-3">Category</th>
+                  <th className="p-3">Playing Role</th>
                   <th className="p-3">Base Price</th>
                   <th className="p-3">Status</th>
                   <th className="p-3">Winning Franchise</th>
@@ -99,10 +99,8 @@ export default function AdminResultsPage() {
                       </div>
                     </td>
 
-                    <td className="p-3">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getCategoryBadgeColor(p.category)}`}>
-                        {p.category}
-                      </span>
+                    <td className="p-3 text-slate-600 font-medium">
+                      {formatRole(p.primaryRole)}
                     </td>
 
                     <td className="p-3 font-mono text-slate-600">

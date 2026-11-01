@@ -286,7 +286,7 @@ export default function AdminDashboardPage() {
               <div className="space-y-1">
                 <Gavel className="w-5 h-5 text-slate-600" />
                 <h4 className="text-xs font-bold text-slate-900 mt-2">Auction Slabs & Rules</h4>
-                <p className="text-[11px] text-slate-500">Configure bid increment rules, category base prices, and countdowns.</p>
+                <p className="text-[11px] text-slate-500">Configure bid increment rules, minimum purse reserve, and countdowns.</p>
               </div>
               <span className="text-xs text-slate-700 font-semibold mt-3 inline-flex items-center gap-1">
                 Open Settings <ArrowRight className="w-3 h-3 text-slate-400" />

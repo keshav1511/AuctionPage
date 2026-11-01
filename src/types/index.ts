@@ -170,7 +170,7 @@ export interface Player {
   registrationNo: string;
   fullName: string;
   name?: string;
-  category: PlayerCategory;
+  category?: PlayerCategory;
   primaryRole: PlayerRole;
   battingStyle: string;
   bowlingStyle: string;

@@ -6,10 +6,9 @@ import { AdminHeader } from "@/components/admin/admin-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatRole } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
-import { BidSlab, PlayerCategory } from "@/types";
+import { BidSlab } from "@/types";
 import { DEFAULT_DYNAMIC_SLABS } from "@/lib/auction/slab-calculator";
 import {
   Save,
@@ -18,7 +17,6 @@ import {
   Trash2,
   Clock,
   TrendingUp,
-  DollarSign,
   AlertCircle,
   Users,
   Search,
@@ -48,15 +46,6 @@ export default function AdminSettingsPage() {
   const [initialCountdown, setInitialCountdown] = useState<number>(auctionRules.initialTimerSeconds || 45);
   const [bidExtension, setBidExtension] = useState<number>(auctionRules.bidExtensionSeconds || 10);
 
-  // Category Base Prices
-  const [categoryPrices, setCategoryPrices] = useState<Record<PlayerCategory, number>>({
-    ICON: auctionRules.iconBasePrice || 2000,
-    PLATINUM: auctionRules.platinumBasePrice || 2000,
-    GOLD: auctionRules.goldBasePrice || 2000,
-    SILVER: auctionRules.silverBasePrice || 2000,
-    EMERGING: auctionRules.emergingBasePrice || 2000,
-  });
-
   // Dynamic Bid Slabs Table
   const [slabs, setSlabs] = useState<BidSlab[]>(auctionRules.bidSlabRules || DEFAULT_DYNAMIC_SLABS);
 
@@ -65,9 +54,6 @@ export default function AdminSettingsPage() {
   const [minSquadSize, setMinSquadSize] = useState<number>(auctionRules.minimumSquadSize || 8);
   const [maxSquadSize, setMaxSquadSize] = useState<number>(auctionRules.maximumSquadSize || 8);
   const [minimumBasePrice, setMinimumBasePrice] = useState<number>(auctionRules.minimumBasePrice || auctionRules.basePrice || 2000);
-  const [maxIconLimit, setMaxIconLimit] = useState<number>(2);
-  const [maxPlatLimit, setMaxPlatLimit] = useState<number>(4);
-  const [minEmergingLimit, setMinEmergingLimit] = useState<number>(3);
 
   // Player Overrides Filter
   const [overrideSearch, setOverrideSearch] = useState("");
@@ -120,14 +106,8 @@ export default function AdminSettingsPage() {
     updateAuctionRules({
       initialTimerSeconds: initialCountdown,
       bidExtensionSeconds: bidExtension,
-      iconBasePrice: categoryPrices.ICON,
-      platinumBasePrice: categoryPrices.PLATINUM,
-      goldBasePrice: categoryPrices.GOLD,
-      silverBasePrice: categoryPrices.SILVER,
-      emergingBasePrice: categoryPrices.EMERGING,
       minimumSquadSize: minSquadSize,
       minimumBasePrice: minimumBasePrice,
-      categoryMinimumBasePrices: categoryPrices,
       bidSlabRules: slabs,
     });
 
@@ -211,39 +191,7 @@ export default function AdminSettingsPage() {
               </CardContent>
             </Card>
 
-            {/* Card 2: Category Base Prices */}
-            <Card className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
-              <CardContent className="p-6 space-y-4">
-                <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-                  <DollarSign className="w-4 h-4 text-emerald-600" />
-                  <h3 className="text-sm font-bold text-slate-900">Category Base Prices (Floor Amounts)</h3>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                  {(["ICON", "PLATINUM", "GOLD", "SILVER", "EMERGING"] as PlayerCategory[]).map((cat) => (
-                    <div key={cat} className="space-y-1.5 p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                      <span className="text-[10px] font-bold text-slate-600 uppercase block">{cat}</span>
-                      <Input
-                        type="number"
-                        value={categoryPrices[cat]}
-                        onChange={(e) =>
-                          setCategoryPrices({
-                            ...categoryPrices,
-                            [cat]: parseInt(e.target.value, 10) || 0,
-                          })
-                        }
-                        className="bg-white border-slate-300 font-mono text-xs h-8"
-                      />
-                      <span className="text-[10px] text-slate-400 font-mono block">
-                        {formatCurrency(categoryPrices[cat], true)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Card 3: Dynamic Bid Increments Slabs Table */}
+            {/* Card 2: Dynamic Bid Increments Slabs Table */}
             <Card className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
               <CardContent className="p-6 space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
@@ -378,55 +326,28 @@ export default function AdminSettingsPage() {
                 </div>
 
                 <div className="p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-xl text-xs text-emerald-900 space-y-1">
-                  <span className="font-bold block">Dynamic Reserve Formula (Phase 5.3):</span>
+                  <span className="font-bold block">Squad Calculation & Dynamic Reserve Formula:</span>
                   <p className="text-[11px] font-mono text-emerald-800">
-                    Remaining Reserve = max(0, MinSquad - Purchased - 1) × FloorPrice
+                    Total Participants = Registered Players + Team Owner (1) + Team Icon (1)
+                  </p>
+                  <p className="text-[11px] font-mono text-emerald-800">
+                    Remaining Reserve = max(0, MinSquad - TotalParticipants - 1) × MinimumBasePrice
                   </p>
                   <p className="text-[11px] font-mono text-emerald-800">
                     Maximum Allowed Bid = max(0, RemainingPurse - RemainingReserve)
                   </p>
                 </div>
-
-                <div className="grid grid-cols-3 gap-3 pt-2">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-slate-700">Max Icon Players</label>
-                    <Input
-                      type="number"
-                      value={maxIconLimit}
-                      onChange={(e) => setMaxIconLimit(parseInt(e.target.value, 10) || 2)}
-                      className="bg-white border-slate-300 font-mono text-xs"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-slate-700">Max Platinum Players</label>
-                    <Input
-                      type="number"
-                      value={maxPlatLimit}
-                      onChange={(e) => setMaxPlatLimit(parseInt(e.target.value, 10) || 4)}
-                      className="bg-white border-slate-300 font-mono text-xs"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-slate-700">Min Emerging Players</label>
-                    <Input
-                      type="number"
-                      value={minEmergingLimit}
-                      onChange={(e) => setMinEmergingLimit(parseInt(e.target.value, 10) || 3)}
-                      className="bg-white border-slate-300 font-mono text-xs"
-                    />
-                  </div>
-                </div>
               </CardContent>
             </Card>
 
-            {/* Card 5: Individual Player Base Price Overrides */}
+            {/* Card 4: Individual Player Base Price Overrides */}
             <Card className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
               <CardContent className="p-6 space-y-4">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
                   <div>
                     <h3 className="text-sm font-bold text-slate-900">Individual Player Base Price Overrides</h3>
                     <p className="text-xs text-slate-500">
-                      Override standard category base prices for specific elite or marquee players.
+                      Configure custom base prices for marquee or specialized players.
                     </p>
                   </div>
 
@@ -446,7 +367,7 @@ export default function AdminSettingsPage() {
                     <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold sticky top-0">
                       <tr>
                         <th className="p-2.5 pl-4">Player Name</th>
-                        <th className="p-2.5">Category</th>
+                        <th className="p-2.5">Playing Role</th>
                         <th className="p-2.5">Default Base Price</th>
                         <th className="p-2.5 pr-4">Custom Base Price Override (₹)</th>
                       </tr>
@@ -457,10 +378,8 @@ export default function AdminSettingsPage() {
                           <td className="p-2.5 pl-4 font-semibold text-slate-900">
                             {player.fullName}
                           </td>
-                          <td className="p-2.5">
-                            <Badge variant="outline" className="text-[10px] bg-slate-50 text-slate-700">
-                              {player.category}
-                            </Badge>
+                          <td className="p-2.5 font-medium text-slate-700">
+                            {player.primaryRole ? formatRole(player.primaryRole) : "ALL_ROUNDER"}
                           </td>
                           <td className="p-2.5 font-mono text-slate-500">
                             {formatCurrency(player.basePrice)}

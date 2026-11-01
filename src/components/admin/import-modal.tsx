@@ -194,7 +194,7 @@ export function ImportModal({
           seasonId: activeLeagueId,
           registrationNo: `ICON-${String(idx + 1).padStart(3, "0")}`,
           fullName: rec.name,
-          category: "ICON",
+          category: rec.category || undefined,
           primaryRole: rec.role || "ALL_ROUNDER",
           battingStyle: "Right-Hand Bat",
           bowlingStyle: "Right-Arm Medium",
@@ -209,7 +209,7 @@ export function ImportModal({
           seasonId: activeLeagueId,
           registrationNo: `REG-${String(idx + 1).padStart(3, "0")}`,
           fullName: rec.name,
-          category: rec.category || "SILVER",
+          category: rec.category || undefined,
           primaryRole: rec.role || "ALL_ROUNDER",
           battingStyle: "Right-Hand Bat",
           bowlingStyle: "Right-Arm Medium",
@@ -607,22 +607,6 @@ export function ImportModal({
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-slate-700">Category / Tier</label>
-                    <select
-                      value={mapping.categoryCol || ""}
-                      onChange={(e) => setMapping({ ...mapping, categoryCol: e.target.value })}
-                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
-                    >
-                      <option value="">-- Choose Column (Optional) --</option>
-                      {parsedData.headers.map((h, i) => (
-                        <option key={i} value={h}>
-                          {h || `Column ${i + 1}`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
                     <label className="text-[11px] font-semibold text-slate-700">Playing Role</label>
                     <select
                       value={mapping.roleCol || ""}
@@ -713,7 +697,7 @@ export function ImportModal({
                         <th className="p-2.5">Detected Type</th>
                         <th className="p-2.5">Team Affiliation</th>
                         <th className="p-2.5">Photo Link / File</th>
-                        <th className="p-2.5">Category</th>
+                        <th className="p-2.5">Playing Role</th>
                         <th className="p-2.5">Base Price</th>
                       </tr>
                     </thead>
@@ -752,8 +736,8 @@ export function ImportModal({
                             <td className="p-2.5 text-slate-600 truncate max-w-[150px] font-mono text-[11px]">
                               {rec.photoRef || <span className="text-slate-300 italic">None</span>}
                             </td>
-                            <td className="p-2.5 text-slate-600">
-                              {rec.type === "ICON" ? "ICON" : rec.category || "SILVER"}
+                            <td className="p-2.5 text-slate-600 font-medium">
+                              {rec.role || "ALL_ROUNDER"}
                             </td>
                             <td className="p-2.5 font-mono text-slate-700">
                               {rec.type === "ICON" ? "₹2,00,000" : (rec.basePrice ? `₹${rec.basePrice.toLocaleString("en-IN")}` : "₹25,000")}

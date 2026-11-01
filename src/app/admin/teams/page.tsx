@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatCurrency } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
 import { Team } from "@/types";
+import { uploadImageSafely } from "@/lib/media/image-upload-client";
 import { Plus, Edit2, Trash2, CheckCircle2, Upload, User, Shield, Users, ArrowRight, Loader2 } from "lucide-react";
 import Link from "next/link";
 
@@ -33,9 +34,6 @@ export default function AdminTeamsPage() {
   const [totalPurse, setTotalPurse] = useState<number>(100000);
   const [minSquad, setMinSquad] = useState<number>(8);
   const [maxSquad, setMaxSquad] = useState<number>(8);
-  const [maxIcon, setMaxIcon] = useState<number>(2);
-  const [maxPlatinum, setMaxPlatinum] = useState<number>(4);
-  const [minEmerging, setMinEmerging] = useState<number>(3);
   const [primaryColor, setPrimaryColor] = useState("#059669");
 
   const openAddModal = () => {
@@ -50,9 +48,6 @@ export default function AdminTeamsPage() {
     setTotalPurse(activeLeague.defaultPurse || 100000);
     setMinSquad(8);
     setMaxSquad(8);
-    setMaxIcon(2);
-    setMaxPlatinum(4);
-    setMinEmerging(3);
     setPrimaryColor("#059669");
     setShowAddModal(true);
   };
@@ -69,14 +64,11 @@ export default function AdminTeamsPage() {
     setTotalPurse(t.purse?.totalBudget || 100000);
     setMinSquad(t.purse?.minPlayers || 8);
     setMaxSquad(t.purse?.maxPlayers || 8);
-    setMaxIcon(t.categoryLimits?.max_icon ?? 2);
-    setMaxPlatinum(t.categoryLimits?.max_platinum ?? 4);
-    setMinEmerging(t.categoryLimits?.min_emerging ?? 3);
     setPrimaryColor(t.primaryColor || "#059669");
     setShowAddModal(true);
   };
 
-  // Direct Computer Image Upload Helper communicating with /api/media/upload
+  // Direct Computer Image Upload Helper communicating with /api/media/upload -> Apps Script DriveApp with compression
   const handleFileUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
     setter: (val: string) => void,
@@ -87,21 +79,8 @@ export default function AdminTeamsPage() {
 
     setUploadingField(fieldId);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("folder", "teams");
-
-      const res = await fetch("/api/media/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Failed to upload image");
-      }
-
-      setter(data.url);
+      const result = await uploadImageSafely(file, "teams");
+      setter(result.url);
       setSuccessNotice("Uploaded image directly to Google Drive.");
       setTimeout(() => setSuccessNotice(null), 3000);
     } catch (err) {
@@ -126,11 +105,6 @@ export default function AdminTeamsPage() {
         iconPlayerName: iconPlayerName.trim(),
         iconPlayerPhotoUrl,
         primaryColor,
-        categoryLimits: {
-          max_icon: maxIcon,
-          max_platinum: maxPlatinum,
-          min_emerging: minEmerging,
-        },
         purse: {
           ...editingTeam.purse,
           totalBudget: totalPurse,
@@ -156,11 +130,6 @@ export default function AdminTeamsPage() {
         primaryColor,
         secondaryColor: "#F59E0B",
         squadCount: 0,
-        categoryLimits: {
-          max_icon: maxIcon,
-          max_platinum: maxPlatinum,
-          min_emerging: minEmerging,
-        },
         purse: {
           id: `purse-${newTeamId}`,
           teamId: newTeamId,
@@ -530,37 +499,6 @@ export default function AdminTeamsPage() {
                     value={maxSquad}
                     onChange={(e) => setMaxSquad(parseInt(e.target.value, 10) || 8)}
                     className="bg-white border-slate-300 font-mono text-xs"
-                  />
-                </div>
-              </div>
-
-              {/* Category Restrictions */}
-              <div className="grid grid-cols-3 gap-3 pt-1">
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-slate-700">Max Icon Players</label>
-                  <Input
-                    type="number"
-                    value={maxIcon}
-                    onChange={(e) => setMaxIcon(parseInt(e.target.value, 10) || 2)}
-                    className="bg-white border-slate-300 text-xs font-mono"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-slate-700">Max Platinum</label>
-                  <Input
-                    type="number"
-                    value={maxPlatinum}
-                    onChange={(e) => setMaxPlatinum(parseInt(e.target.value, 10) || 4)}
-                    className="bg-white border-slate-300 text-xs font-mono"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[11px] font-semibold text-slate-700">Min Emerging</label>
-                  <Input
-                    type="number"
-                    value={minEmerging}
-                    onChange={(e) => setMinEmerging(parseInt(e.target.value, 10) || 3)}
-                    className="bg-white border-slate-300 text-xs font-mono"
                   />
                 </div>
               </div>

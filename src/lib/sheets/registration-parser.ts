@@ -218,8 +218,8 @@ export function parseRegistrationRows(
       unmatchedPhotos.push(rawName);
     }
 
-    // 5. Parse Price & Category
-    const category = type === "ICON" ? "ICON" : normalizePlayerCategory(rawCategory);
+    // 5. Parse Price & Role (Category is optional legacy)
+    const category = rawCategory ? normalizePlayerCategory(rawCategory) : undefined;
     const role = normalizePlayerRole(rawRole);
     let basePrice: number = defaultBasePrice || 2000;
     if (type === "ICON") {

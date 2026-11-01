@@ -7,7 +7,7 @@ import { AdminHeader } from "@/components/admin/admin-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatCurrency, formatRole, getCategoryBadgeColor } from "@/lib/utils";
+import { formatCurrency, formatRole } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
 import { useRealtimeAuction } from "@/lib/hooks/use-realtime-auction";
 import { calculateNextBid } from "@/lib/auction/slab-calculator";
@@ -465,7 +465,7 @@ export default function AuctionControlDesk() {
                             {p.fullName}
                           </h5>
                           <p className="text-[10px] text-slate-500 truncate">
-                            {formatRole(p.primaryRole)} • {p.category}
+                            {formatRole(p.primaryRole)}
                           </p>
                         </div>
 
@@ -528,9 +528,6 @@ export default function AuctionControlDesk() {
 
                     <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex items-center gap-2">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getCategoryBadgeColor(currentPlayer.category)}`}>
-                          {currentPlayer.category}
-                        </span>
                         <span className="font-mono text-xs text-slate-400">
                           {currentPlayer.registrationNo}
                         </span>
@@ -716,7 +713,7 @@ export default function AuctionControlDesk() {
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-sans text-slate-500">Squad:</span>
                             <span className={`font-semibold ${isCompleted ? "text-purple-700" : "text-slate-700"}`}>
-                              {playersPurchased} / {minimumSquadSize} Players
+                              {playersPurchased} / {minimumSquadSize} Participants
                             </span>
                           </div>
 
@@ -740,7 +737,7 @@ export default function AuctionControlDesk() {
                       <div className="mt-3 pt-2 border-t border-slate-200/60">
                         {isCompleted ? (
                           <div
-                            title={`Squad completed (${playersPurchased}/${minimumSquadSize} players required)`}
+                            title={analysis?.ineligibilityReason || `Squad completed (${playersPurchased}/${minimumSquadSize} participants)`}
                             className="w-full py-1 px-1.5 rounded-lg bg-purple-50 text-purple-700 font-medium text-xs flex flex-col items-center justify-center border border-purple-200/80"
                           >
                             <div className="flex items-center justify-between w-full">
