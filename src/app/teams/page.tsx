@@ -36,7 +36,7 @@ export default function TeamsPage() {
             Teams & Purse Allocation
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Official franchises registered for {activeLeague.name} at {activeLeague.matchVenue}.
+            Official franchises registered for {activeLeague.name}{activeLeague.matchVenue ? ` at ${activeLeague.matchVenue}` : ""}.
           </p>
         </div>
 
@@ -176,13 +176,19 @@ export default function TeamsPage() {
                         >
                           <CardContent className="p-4 flex items-center justify-between">
                             <div className="flex items-center gap-3">
-                              <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-slate-800 shrink-0">
-                                <Image
-                                  src={p.photoUrl}
-                                  alt={p.fullName}
-                                  fill
-                                  className="object-cover"
-                                />
+                              <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-slate-800 shrink-0 flex items-center justify-center">
+                                {p.photoUrl ? (
+                                  <Image
+                                    src={p.photoUrl}
+                                    alt={p.fullName}
+                                    fill
+                                    className="object-cover"
+                                  />
+                                ) : (
+                                  <span className="font-bold text-xs text-emerald-400">
+                                    {p.fullName.substring(0, 2).toUpperCase()}
+                                  </span>
+                                )}
                               </div>
                               <div>
                                 <h4 className="font-bold text-white text-sm">{p.fullName}</h4>

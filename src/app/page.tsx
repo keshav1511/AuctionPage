@@ -47,18 +47,26 @@ export default function HomePage() {
 
               <p className="text-base sm:text-lg text-slate-300 font-normal leading-relaxed">
                 {activeLeague.description ||
-                  "6 Franchises. 120+ Registered Athletes. Multi-Crore Purse Battles. Witness the live bidding wars, squad acquisitions, and dynamic purse fluctuations in real-time."}
+                  `${teams.length > 0 ? `${teams.length} Official Franchises` : "Tournament Franchises"}. ${players.length > 0 ? `${players.length} Registered Athletes` : "Dynamic Player Pool"}. Witness the live bidding wars, squad acquisitions, and purse fluctuations in real-time.`}
               </p>
 
-              <div className="flex items-center justify-center gap-4 text-xs text-slate-400">
-                <span className="flex items-center gap-1.5">
-                  <MapPin className="w-4 h-4 text-emerald-400" /> {activeLeague.matchVenue}
-                </span>
-                <span className="text-slate-600">•</span>
-                <span className="flex items-center gap-1.5">
-                  <Calendar className="w-4 h-4 text-amber-400" /> Auction: {activeLeague.auctionDate} @ {activeLeague.auctionTime}
-                </span>
-              </div>
+              {(activeLeague.matchVenue || activeLeague.auctionDate) && (
+                <div className="flex items-center justify-center gap-4 text-xs text-slate-400">
+                  {activeLeague.matchVenue && (
+                    <span className="flex items-center gap-1.5">
+                      <MapPin className="w-4 h-4 text-emerald-400" /> {activeLeague.matchVenue}
+                    </span>
+                  )}
+                  {activeLeague.matchVenue && activeLeague.auctionDate && (
+                    <span className="text-slate-600">•</span>
+                  )}
+                  {activeLeague.auctionDate && (
+                    <span className="flex items-center gap-1.5">
+                      <Calendar className="w-4 h-4 text-amber-400" /> Auction: {activeLeague.auctionDate}{activeLeague.auctionTime ? ` @ ${activeLeague.auctionTime}` : ""}
+                    </span>
+                  )}
+                </div>
+              )}
 
               <div className="flex flex-wrap items-center justify-center gap-4 pt-4">
                 <Button asChild size="lg" variant="gold" className="gap-2 shadow-amber-500/20 text-black font-bold">

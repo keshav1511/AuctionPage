@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatCurrency } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
 import { Team } from "@/types";
-import { Plus, Edit2, Trash2, CheckCircle2, Upload, User, Shield, Users, ArrowRight } from "lucide-react";
+import { Plus, Edit2, Trash2, CheckCircle2, Upload, User, Shield, Users, ArrowRight, Loader2 } from "lucide-react";
 import Link from "next/link";
 
 export default function AdminTeamsPage() {
@@ -20,6 +20,7 @@ export default function AdminTeamsPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [uploadingField, setUploadingField] = useState<string | null>(null);
 
   // Form State for Add / Edit Team
   const [teamName, setTeamName] = useState("");
@@ -29,9 +30,9 @@ export default function AdminTeamsPage() {
   const [ownerPhotoUrl, setOwnerPhotoUrl] = useState("");
   const [iconPlayerName, setIconPlayerName] = useState("");
   const [iconPlayerPhotoUrl, setIconPlayerPhotoUrl] = useState("");
-  const [totalPurse, setTotalPurse] = useState<number>(5000000);
-  const [minSquad, setMinSquad] = useState<number>(15);
-  const [maxSquad, setMaxSquad] = useState<number>(18);
+  const [totalPurse, setTotalPurse] = useState<number>(100000);
+  const [minSquad, setMinSquad] = useState<number>(8);
+  const [maxSquad, setMaxSquad] = useState<number>(8);
   const [maxIcon, setMaxIcon] = useState<number>(2);
   const [maxPlatinum, setMaxPlatinum] = useState<number>(4);
   const [minEmerging, setMinEmerging] = useState<number>(3);
@@ -41,14 +42,14 @@ export default function AdminTeamsPage() {
     setEditingTeam(null);
     setTeamName("");
     setShortCode("");
-    setLogoUrl("https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?w=200&auto=format&fit=crop&q=80");
+    setLogoUrl("");
     setOwnerName("");
-    setOwnerPhotoUrl("https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80");
+    setOwnerPhotoUrl("");
     setIconPlayerName("");
-    setIconPlayerPhotoUrl("https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80");
-    setTotalPurse(5000000);
-    setMinSquad(15);
-    setMaxSquad(18);
+    setIconPlayerPhotoUrl("");
+    setTotalPurse(activeLeague.defaultPurse || 100000);
+    setMinSquad(8);
+    setMaxSquad(8);
     setMaxIcon(2);
     setMaxPlatinum(4);
     setMinEmerging(3);
@@ -65,9 +66,9 @@ export default function AdminTeamsPage() {
     setOwnerPhotoUrl(t.ownerPhotoUrl || "");
     setIconPlayerName(t.iconPlayerName || "");
     setIconPlayerPhotoUrl(t.iconPlayerPhotoUrl || "");
-    setTotalPurse(t.purse?.totalBudget || 5000000);
-    setMinSquad(t.purse?.minPlayers || 15);
-    setMaxSquad(t.purse?.maxPlayers || 18);
+    setTotalPurse(t.purse?.totalBudget || 100000);
+    setMinSquad(t.purse?.minPlayers || 8);
+    setMaxSquad(t.purse?.maxPlayers || 8);
     setMaxIcon(t.categoryLimits?.max_icon ?? 2);
     setMaxPlatinum(t.categoryLimits?.max_platinum ?? 4);
     setMinEmerging(t.categoryLimits?.min_emerging ?? 3);
@@ -75,20 +76,38 @@ export default function AdminTeamsPage() {
     setShowAddModal(true);
   };
 
-  // Direct Computer Image Upload Helper
-  const handleFileUpload = (
+  // Direct Computer Image Upload Helper communicating with /api/media/upload
+  const handleFileUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
-    setter: (val: string) => void
+    setter: (val: string) => void,
+    fieldId: string
   ) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          setter(event.target.result as string);
-        }
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    setUploadingField(fieldId);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("folder", "teams");
+
+      const res = await fetch("/api/media/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to upload image");
+      }
+
+      setter(data.url);
+      setSuccessNotice("Uploaded image directly to Google Drive.");
+      setTimeout(() => setSuccessNotice(null), 3000);
+    } catch (err) {
+      alert((err as Error).message || "Upload failed");
+    } finally {
+      setUploadingField(null);
     }
   };
 
@@ -101,10 +120,10 @@ export default function AdminTeamsPage() {
       updateTeam(editingTeam.id, {
         name: teamName,
         shortCode: shortCode.toUpperCase() || teamName.substring(0, 3).toUpperCase(),
-        logoUrl: logoUrl || editingTeam.logoUrl,
-        ownerName,
+        logoUrl: logoUrl || editingTeam.logoUrl || "",
+        ownerName: ownerName.trim(),
         ownerPhotoUrl,
-        iconPlayerName,
+        iconPlayerName: iconPlayerName.trim(),
         iconPlayerPhotoUrl,
         primaryColor,
         categoryLimits: {
@@ -129,10 +148,10 @@ export default function AdminTeamsPage() {
         seasonId: activeLeague.id,
         name: teamName,
         shortCode: shortCode.toUpperCase() || teamName.substring(0, 3).toUpperCase(),
-        logoUrl: logoUrl || "https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?w=200&auto=format&fit=crop&q=80",
-        ownerName: ownerName || "Franchise Syndicate",
+        logoUrl: logoUrl || "",
+        ownerName: ownerName.trim(),
         ownerPhotoUrl,
-        iconPlayerName: iconPlayerName || "Unassigned",
+        iconPlayerName: iconPlayerName.trim(),
         iconPlayerPhotoUrl,
         primaryColor,
         secondaryColor: "#F59E0B",
@@ -164,7 +183,7 @@ export default function AdminTeamsPage() {
   const handleDeleteTeam = (id: string) => {
     deleteTeam(id);
     setDeleteConfirmId(null);
-    setSuccessNotice("Franchise removed from tournament.");
+    setSuccessNotice("Franchise removed successfully.");
     setTimeout(() => setSuccessNotice(null), 3000);
   };
 
@@ -174,17 +193,16 @@ export default function AdminTeamsPage() {
 
       <div className="flex-1 flex flex-col min-w-0">
         <AdminHeader
-          title="Team & Franchise Management"
+          title="Franchise Team Management"
           subtitle={`${activeLeague.name} • ${teams.length} Registered Franchises`}
           action={
             <Button
-              type="button"
               onClick={openAddModal}
               size="sm"
-              className="gap-2 bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs shadow-sm"
+              className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs shadow-sm"
             >
-              <Plus className="w-3.5 h-3.5" />
-              Add Franchise
+              <Plus className="w-4 h-4" />
+              Register Franchise
             </Button>
           }
         />
@@ -202,7 +220,7 @@ export default function AdminTeamsPage() {
             <div>
               <h2 className="text-sm font-bold text-slate-900">Tournament Franchises</h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Upload official team logos directly from your computer. These logos appear consistently across the live auction stage and admin desk.
+                Upload official team logos directly from your computer. These logos appear consistently across the live auction stage and admin desk without AI distortion.
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -225,9 +243,14 @@ export default function AdminTeamsPage() {
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="w-12 h-12 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
                         {team.logoUrl ? (
-                          <img src={team.logoUrl} alt={team.name} className="w-full h-full object-cover" />
+                          <img src={team.logoUrl} alt={team.name} className="w-full h-full object-contain p-1" />
                         ) : (
-                          <span className="font-bold text-xs text-slate-500">{team.shortCode}</span>
+                          <div
+                            className="w-full h-full flex items-center justify-center font-bold text-xs text-white"
+                            style={{ backgroundColor: team.primaryColor || "#059669" }}
+                          >
+                            {team.shortCode || team.name.substring(0, 3).toUpperCase()}
+                          </div>
                         )}
                       </div>
                       <div className="min-w-0">
@@ -264,11 +287,11 @@ export default function AdminTeamsPage() {
                   {/* Owner & Icon Player Sub-Card */}
                   <div className="grid grid-cols-2 gap-2 p-2.5 bg-slate-50 border border-slate-100 rounded-xl text-[11px]">
                     <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-full bg-white border border-slate-200 overflow-hidden shrink-0">
+                      <div className="w-7 h-7 rounded-full bg-white border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center">
                         {team.ownerPhotoUrl ? (
                           <img src={team.ownerPhotoUrl} alt="Owner" className="w-full h-full object-cover" />
                         ) : (
-                          <User className="w-3.5 h-3.5 text-slate-400 m-1.5" />
+                          <User className="w-3.5 h-3.5 text-slate-400" />
                         )}
                       </div>
                       <div className="min-w-0">
@@ -278,11 +301,11 @@ export default function AdminTeamsPage() {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-full bg-white border border-slate-200 overflow-hidden shrink-0">
+                      <div className="w-7 h-7 rounded-full bg-white border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center">
                         {team.iconPlayerPhotoUrl ? (
                           <img src={team.iconPlayerPhotoUrl} alt="Icon" className="w-full h-full object-cover" />
                         ) : (
-                          <Shield className="w-3.5 h-3.5 text-slate-400 m-1.5" />
+                          <Shield className="w-3.5 h-3.5 text-slate-400" />
                         )}
                       </div>
                       <div className="min-w-0">
@@ -300,31 +323,20 @@ export default function AdminTeamsPage() {
                         {formatCurrency(team.purse?.totalBudget || 100000)}
                       </span>
                     </div>
-                    <div className="flex justify-between items-center text-[11px]">
-                      <span className="text-slate-500">Spent / Remaining:</span>
-                      <span className="font-mono text-emerald-700 font-semibold">
-                        {formatCurrency(team.purse?.remainingAmount || 100000, true)} Left
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center text-[11px]">
-                      <span className="text-slate-500">Squad Target:</span>
-                      <span className="font-mono text-slate-700">
-                        {team.squadCount || 0} / {team.purse?.maxPlayers || 8} (Min: {team.purse?.minPlayers || 8})
-                      </span>
-                    </div>
-                  </div>
 
-                  {/* Category Limits */}
-                  <div className="flex flex-wrap gap-1.5 pt-1 text-[10px]">
-                    <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-medium">
-                      Max Icon: {team.categoryLimits?.max_icon ?? 2}
-                    </span>
-                    <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200 font-medium">
-                      Max Plat: {team.categoryLimits?.max_platinum ?? 4}
-                    </span>
-                    <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-medium">
-                      Min Emerging: {team.categoryLimits?.min_emerging ?? 3}
-                    </span>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500">Remaining Balance:</span>
+                      <span className="font-mono font-bold text-emerald-700">
+                        {formatCurrency(team.purse?.remainingAmount || 0)}
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-[11px]">
+                      <span className="text-slate-500">Target Squad Size:</span>
+                      <span className="font-mono font-semibold text-slate-700">
+                        {team.purse?.minPlayers || 8} - {team.purse?.maxPlayers || 8} Players
+                      </span>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -332,15 +344,26 @@ export default function AdminTeamsPage() {
           </div>
 
           {teams.length === 0 && (
-            <div className="p-12 text-center bg-white border border-slate-200 rounded-2xl space-y-3">
-              <Users className="w-10 h-10 text-slate-300 mx-auto" />
-              <h3 className="text-sm font-bold text-slate-800">No Franchises Configured</h3>
-              <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                Add your tournament teams with logos, owner details, and purse allocations.
-              </p>
-              <Button onClick={openAddModal} size="sm" className="bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs">
-                Add First Team
-              </Button>
+            <div className="p-16 text-center bg-white border border-slate-200 rounded-2xl space-y-4 shadow-sm">
+              <div className="w-16 h-16 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mx-auto text-emerald-600">
+                <Users className="w-8 h-8" />
+              </div>
+              <div className="max-w-md mx-auto space-y-1.5">
+                <h3 className="text-base font-bold text-slate-900">No Franchises Configured</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Add your tournament franchises with short codes, original logos, owner details, and purse allocations.
+                </p>
+              </div>
+              <div className="pt-2">
+                <Button
+                  onClick={openAddModal}
+                  size="sm"
+                  className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm"
+                >
+                  <Plus className="w-4 h-4" />
+                  Register First Franchise
+                </Button>
+              </div>
             </div>
           )}
         </main>
@@ -365,7 +388,7 @@ export default function AdminTeamsPage() {
                       if (!shortCode) setShortCode(e.target.value.substring(0, 3).toUpperCase());
                     }}
                     required
-                    placeholder="e.g. Nalanda Strikers"
+                    placeholder="e.g. Royal Strikers"
                     className="bg-white border-slate-300 text-xs"
                   />
                 </div>
@@ -387,18 +410,19 @@ export default function AdminTeamsPage() {
                 <label className="text-xs font-semibold text-slate-700 block">Team Logo</label>
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-lg bg-white border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
-                    {logoUrl ? <img src={logoUrl} alt="Logo" className="w-full h-full object-cover" /> : <Shield className="w-5 h-5 text-slate-400" />}
+                    {logoUrl ? <img src={logoUrl} alt="Logo" className="w-full h-full object-contain p-1" /> : <Shield className="w-5 h-5 text-slate-400" />}
                   </div>
                   <div className="flex-1 space-y-1.5">
                     <label className="cursor-pointer inline-block">
                       <span className="px-3 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5 shadow-sm">
-                        <Upload className="w-3 h-3 text-slate-500" />
-                        Upload Logo from Computer
+                        {uploadingField === "logo" ? <Loader2 className="w-3 h-3 animate-spin text-emerald-600" /> : <Upload className="w-3 h-3 text-slate-500" />}
+                        {uploadingField === "logo" ? "Uploading to Drive..." : "Upload Logo"}
                       </span>
                       <input
                         type="file"
                         accept="image/*"
-                        onChange={(e) => handleFileUpload(e, setLogoUrl)}
+                        disabled={uploadingField === "logo"}
+                        onChange={(e) => handleFileUpload(e, setLogoUrl, "logo")}
                         className="hidden"
                       />
                     </label>
@@ -425,13 +449,14 @@ export default function AdminTeamsPage() {
                   <div className="flex items-center gap-2 pt-1">
                     <label className="cursor-pointer">
                       <span className="px-2 py-1 rounded border border-slate-300 bg-white text-[10px] font-medium text-slate-700 inline-flex items-center gap-1">
-                        <Upload className="w-2.5 h-2.5" />
+                        {uploadingField === "owner" ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Upload className="w-2.5 h-2.5" />}
                         Photo File
                       </span>
                       <input
                         type="file"
                         accept="image/*"
-                        onChange={(e) => handleFileUpload(e, setOwnerPhotoUrl)}
+                        disabled={uploadingField === "owner"}
+                        onChange={(e) => handleFileUpload(e, setOwnerPhotoUrl, "owner")}
                         className="hidden"
                       />
                     </label>
@@ -455,13 +480,14 @@ export default function AdminTeamsPage() {
                   <div className="flex items-center gap-2 pt-1">
                     <label className="cursor-pointer">
                       <span className="px-2 py-1 rounded border border-slate-300 bg-white text-[10px] font-medium text-slate-700 inline-flex items-center gap-1">
-                        <Upload className="w-2.5 h-2.5" />
+                        {uploadingField === "icon" ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Upload className="w-2.5 h-2.5" />}
                         Photo File
                       </span>
                       <input
                         type="file"
                         accept="image/*"
-                        onChange={(e) => handleFileUpload(e, setIconPlayerPhotoUrl)}
+                        disabled={uploadingField === "icon"}
+                        onChange={(e) => handleFileUpload(e, setIconPlayerPhotoUrl, "icon")}
                         className="hidden"
                       />
                     </label>
@@ -482,7 +508,7 @@ export default function AdminTeamsPage() {
                   <Input
                     type="number"
                     value={totalPurse}
-                    onChange={(e) => setTotalPurse(parseInt(e.target.value, 10) || 5000000)}
+                    onChange={(e) => setTotalPurse(parseInt(e.target.value, 10) || 100000)}
                     className="bg-white border-slate-300 font-mono text-xs"
                   />
                 </div>
@@ -492,7 +518,7 @@ export default function AdminTeamsPage() {
                   <Input
                     type="number"
                     value={minSquad}
-                    onChange={(e) => setMinSquad(parseInt(e.target.value, 10) || 15)}
+                    onChange={(e) => setMinSquad(parseInt(e.target.value, 10) || 8)}
                     className="bg-white border-slate-300 font-mono text-xs"
                   />
                 </div>
@@ -502,7 +528,7 @@ export default function AdminTeamsPage() {
                   <Input
                     type="number"
                     value={maxSquad}
-                    onChange={(e) => setMaxSquad(parseInt(e.target.value, 10) || 18)}
+                    onChange={(e) => setMaxSquad(parseInt(e.target.value, 10) || 8)}
                     className="bg-white border-slate-300 font-mono text-xs"
                   />
                 </div>

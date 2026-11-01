@@ -38,6 +38,10 @@ export interface League {
   name: string;
   description?: string;
   logoUrl?: string;
+  orgName?: string;
+  orgLogoUrl?: string;
+  defaultBasePrice?: number;
+  defaultPurse?: number;
   matchDate?: string;
   matchVenue?: string;
   auctionDate?: string;
@@ -247,6 +251,8 @@ export interface BidSlab {
 export interface AuctionRules {
   id?: string;
   seasonId: string;
+  totalPurse?: number;
+  basePrice?: number;
   iconBasePrice?: number;
   platinumBasePrice?: number;
   goldBasePrice?: number;
@@ -257,12 +263,14 @@ export interface AuctionRules {
   bidSlabRules?: BidSlab[];
   initialTimerSeconds: number;
   bidExtensionSeconds: number;
+  bidExtensionThresholdSeconds?: number;
   timerDurationSeconds?: number;
   minimumSquadSize?: number;
   maximumSquadSize?: number;
   minimumBasePrice?: number;
   minBidIncrement?: number;
   purseAmount?: number;
+  purseReservePerPlayer?: number;
   categoryQuotas?: Record<string, number>;
   bidIncrements?: Array<{ upTo: number; increment: number }>;
   categoryMinimumBasePrices?: Partial<Record<PlayerCategory, number>>;

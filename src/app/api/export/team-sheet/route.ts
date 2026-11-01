@@ -4,7 +4,7 @@ import { getTeamsFromSheets, getPlayersFromSheets } from "@/lib/sheets/google-sh
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const teamId = searchParams.get("teamId");
-  const leagueId = searchParams.get("leagueId") || "league-ntl";
+  const leagueId = searchParams.get("leagueId") || "league-main";
 
   const teams = await getTeamsFromSheets(leagueId);
   const players = await getPlayersFromSheets(leagueId);

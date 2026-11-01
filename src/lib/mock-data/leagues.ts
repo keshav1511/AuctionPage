@@ -1,17 +1,16 @@
 // ==============================================================================
-// NTL AUCTION PLATFORM - INITIAL LEAGUES DATA FIXTURE
-// Pure data module: safe for both Server Components / API Routes and Client Components.
-// Does NOT contain any "use client" directives or React hooks.
+// BLANK CRICKET AUCTION PLATFORM - INITIAL LEAGUES FIXTURE
+// Pure data module: safe for Server Components / API Routes and Client Components.
 // ==============================================================================
 
 import { League } from "@/types";
-import { NTL_DEFAULT_LEAGUE } from "@/config/ntl-season-1";
+import { DEFAULT_LEAGUE } from "@/config/default-config";
 
 export const INITIAL_LEAGUES: League[] = [
-  NTL_DEFAULT_LEAGUE,
+  DEFAULT_LEAGUE,
 ];
 
-export const DEFAULT_LEAGUE_ID = "league-ntl";
+export const DEFAULT_LEAGUE_ID = DEFAULT_LEAGUE.id;
 
 export function getInitialLeagueById(leagueId: string): League | undefined {
   return INITIAL_LEAGUES.find((l) => l.id === leagueId);

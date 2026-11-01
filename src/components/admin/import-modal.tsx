@@ -39,10 +39,13 @@ interface ImportModalProps {
   onClose: () => void;
   defaultSheetUrl?: string;
   defaultDriveUrl?: string;
+  defaultBasePrice?: number;
+  existingPlayerCount?: number;
   onImportComplete?: (data: {
     players: Player[];
     owners: Array<{ name: string; photoUrl?: string; teamName?: string }>;
     icons: Array<{ name: string; photoUrl?: string; teamName?: string }>;
+    mode: "append" | "replace";
   }) => void;
   activeLeagueId: string;
 }
@@ -52,15 +55,18 @@ export function ImportModal({
   onClose,
   defaultSheetUrl,
   defaultDriveUrl,
+  defaultBasePrice,
+  existingPlayerCount = 0,
   onImportComplete,
   activeLeagueId,
 }: ImportModalProps) {
-  const [sourceType, setSourceType] = useState<"sheets" | "excel">("sheets");
+  const [sourceType, setSourceType] = useState<"sheets" | "excel">("excel");
   const [sheetUrl, setSheetUrl] = useState(defaultSheetUrl || "");
   const [driveUrl, setDriveUrl] = useState(defaultDriveUrl || "");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
+  const [importMode, setImportMode] = useState<"append" | "replace">(existingPlayerCount > 0 ? "append" : "replace");
 
   // Sync props when opening
   useEffect(() => {
@@ -162,7 +168,7 @@ export function ImportModal({
 
   // Derive transformed rows with categorization using pure parser
   const validationSummary = parsedData
-    ? parseRegistrationRows(parsedData.headers, parsedData.rows, mapping)
+    ? parseRegistrationRows(parsedData.headers, parsedData.rows, mapping, defaultBasePrice || 2000)
     : null;
 
   const derivedPlayers: Player[] = [];
@@ -186,14 +192,14 @@ export function ImportModal({
         derivedPlayers.push({
           id: `player-icon-${idx}-${Date.now()}`,
           seasonId: activeLeagueId,
-          registrationNo: `ICON-${idx + 1}`,
+          registrationNo: `ICON-${String(idx + 1).padStart(3, "0")}`,
           fullName: rec.name,
           category: "ICON",
           primaryRole: rec.role || "ALL_ROUNDER",
           battingStyle: "Right-Hand Bat",
           bowlingStyle: "Right-Arm Medium",
-          photoUrl: rec.resolvedPhotoUrl || rec.photoRef || "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=600&auto=format&fit=crop&q=80",
-          basePrice: rec.basePrice || 200000,
+          photoUrl: rec.resolvedPhotoUrl || rec.photoRef || "",
+          basePrice: rec.basePrice || defaultBasePrice || 2000,
           status: "AVAILABLE",
           sortOrder: idx + 1,
         });
@@ -201,14 +207,14 @@ export function ImportModal({
         derivedPlayers.push({
           id: `player-import-${idx}-${Date.now()}`,
           seasonId: activeLeagueId,
-          registrationNo: `REG-${1000 + idx}`,
+          registrationNo: `REG-${String(idx + 1).padStart(3, "0")}`,
           fullName: rec.name,
           category: rec.category || "SILVER",
-          primaryRole: rec.role || "BATSMAN",
+          primaryRole: rec.role || "ALL_ROUNDER",
           battingStyle: "Right-Hand Bat",
           bowlingStyle: "Right-Arm Medium",
-          photoUrl: rec.resolvedPhotoUrl || rec.photoRef || "https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?w=600&auto=format&fit=crop&q=80",
-          basePrice: rec.basePrice || 25000,
+          photoUrl: rec.resolvedPhotoUrl || rec.photoRef || "",
+          basePrice: rec.basePrice || defaultBasePrice || 2000,
           status: "AVAILABLE",
           sortOrder: idx + 1,
         });
@@ -247,6 +253,7 @@ export function ImportModal({
         players: derivedPlayers,
         owners: derivedOwners,
         icons: derivedIcons,
+        mode: importMode,
       });
 
       onClose();
@@ -462,6 +469,55 @@ export function ImportModal({
                       </option>
                     ))}
                   </select>
+                </div>
+              )}
+
+              {parsedData.headers.length === 1 && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
+                  <span className="font-bold">✓ Single-column file detected:</span>
+                  <span>All {parsedData.totalRows} entries will be imported as available auction players.</span>
+                </div>
+              )}
+
+              {validationSummary && validationSummary.duplicates.length > 0 && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    Duplicate Player Names Detected ({validationSummary.duplicates.length})
+                  </div>
+                  <p className="text-[11px] text-amber-700">
+                    The following names appear multiple times: {validationSummary.duplicates.slice(0, 5).join(", ")}{validationSummary.duplicates.length > 5 ? ` and ${validationSummary.duplicates.length - 5} more` : ""}.
+                  </p>
+                </div>
+              )}
+
+              {existingPlayerCount > 0 && (
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wide block">Import Target Mode</span>
+                  <div className="flex flex-wrap items-center gap-6 text-xs font-medium">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="importMode"
+                        value="append"
+                        checked={importMode === "append"}
+                        onChange={() => setImportMode("append")}
+                        className="text-emerald-600"
+                      />
+                      <span>Append to current {existingPlayerCount} players</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="importMode"
+                        value="replace"
+                        checked={importMode === "replace"}
+                        onChange={() => setImportMode("replace")}
+                        className="text-red-600"
+                      />
+                      <span className="text-red-700 font-semibold">Replace existing {existingPlayerCount} players</span>
+                    </label>
+                  </div>
                 </div>
               )}
 

@@ -1,4 +1,4 @@
 import { Player } from "@/types";
-import { NTL_PLAYERS } from "@/config/ntl-season-1";
+import { INITIAL_PLAYERS } from "@/config/default-config";
 
-export const MOCK_PLAYERS: Player[] = NTL_PLAYERS;
+export const MOCK_PLAYERS: Player[] = INITIAL_PLAYERS;

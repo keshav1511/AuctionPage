@@ -184,7 +184,7 @@ export async function POST(req: NextRequest) {
           seasonId: leagueId,
           name: teamName,
           shortCode,
-          logoUrl: "https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?w=200&auto=format&fit=crop&q=80",
+          logoUrl: "",
           ownerName: "",
           ownerPhotoUrl: "",
           iconPlayerName: "",

@@ -32,8 +32,8 @@ import {
 } from "./tab-definitions";
 import { initializeLeagueWorkbook } from "./workbook-manager";
 import { League, Team, Player, AuctionRules, Bid } from "@/types";
+import { DEFAULT_LEAGUE, DEFAULT_AUCTION_RULES } from "@/config/default-config";
 import { getInitialLeagueById } from "@/lib/mock-data/leagues";
-import { NTL_DEFAULT_LEAGUE, NTL_DEFAULT_RULES, NTL_TEAMS, NTL_PLAYERS } from "@/config/ntl-season-1";
 import { callAppsScript, isAppsScriptConfigured } from "./apps-script-client";
 
 // Local in-process serialization mutex map per league ID
@@ -171,10 +171,10 @@ const memoryMirrors = new Map<string, InMemoryLeagueMirror>();
 
 function getOrCreateMemoryMirror(leagueId: string): InMemoryLeagueMirror {
   if (!memoryMirrors.has(leagueId)) {
-    const base = getInitialLeagueById(leagueId) || NTL_DEFAULT_LEAGUE;
-    const initialPlayers: Player[] = [...NTL_PLAYERS];
-    const initialTeams: Team[] = [...NTL_TEAMS];
-    const initialRules = { ...NTL_DEFAULT_RULES, seasonId: leagueId };
+    const base = { ...DEFAULT_LEAGUE, id: leagueId };
+    const initialPlayers: Player[] = [];
+    const initialTeams: Team[] = [];
+    const initialRules = { ...DEFAULT_AUCTION_RULES, seasonId: leagueId };
 
     const initialAuctionState: AuctionStateRow = {
       id: `auction-${leagueId}`,
@@ -242,6 +242,7 @@ async function syncFromAppsScript(leagueId: string): Promise<boolean> {
   if (!isAppsScriptConfigured()) return false;
   try {
     const data = await callAppsScript<{
+      config?: { league: League; rules: AuctionRules };
       state?: AuctionStateRow;
       teams?: Team[];
       players?: Player[];
@@ -250,11 +251,19 @@ async function syncFromAppsScript(leagueId: string): Promise<boolean> {
 
     if (data) {
       const mirror = getOrCreateMemoryMirror(leagueId);
-      if (Array.isArray(data.teams) && data.teams.length > 0) {
+      if (data.config && data.config.league) {
+        mirror.league = { ...mirror.league, ...data.config.league };
+        if (data.config.rules) mirror.rules = { ...mirror.rules, ...data.config.rules };
+        configCache.set(leagueId, {
+          data: { league: mirror.league, rules: mirror.rules },
+          expiresAt: Date.now() + CACHE_TTL_MS,
+        });
+      }
+      if (Array.isArray(data.teams)) {
         mirror.teams = data.teams;
         teamsCache.set(leagueId, { data: data.teams, expiresAt: Date.now() + CACHE_TTL_MS });
       }
-      if (Array.isArray(data.players) && data.players.length > 0) {
+      if (Array.isArray(data.players)) {
         mirror.players = data.players;
         playersCache.set(leagueId, { data: data.players, expiresAt: Date.now() + CACHE_TTL_MS });
       }
@@ -318,7 +327,7 @@ export async function getLeagueConfigFromSheets(
         if (parsed) {
           const result = {
             league: parsed.league,
-            rules: parsed.rules || { ...NTL_DEFAULT_RULES, seasonId: leagueId },
+            rules: parsed.rules || { ...DEFAULT_AUCTION_RULES, seasonId: leagueId },
           };
           configCache.set(leagueId, { data: result, expiresAt: Date.now() + CACHE_TTL_MS });
           return result;
@@ -328,7 +337,7 @@ export async function getLeagueConfigFromSheets(
       // Tab was empty; initialize and seed
       await initializeLeagueWorkbook(spreadsheetId, {
         league: getInitialLeagueById(leagueId),
-        rules: { ...NTL_DEFAULT_RULES, seasonId: leagueId },
+        rules: { ...DEFAULT_AUCTION_RULES, seasonId: leagueId },
       });
 
       const mirror = getOrCreateMemoryMirror(leagueId);
@@ -355,6 +364,15 @@ export async function saveLeagueConfigToSheets(league: League, rules?: AuctionRu
   mirror.league = { ...mirror.league, ...league };
   if (rules) mirror.rules = { ...mirror.rules, ...rules };
   invalidateLeagueCache(league.id);
+
+  if (isAppsScriptConfigured()) {
+    try {
+      await callAppsScript("SAVE_LEAGUE_CONFIG", { league: mirror.league, rules: mirror.rules });
+    } catch (err) {
+      console.warn("[SheetsRepository] Apps Script saveLeagueConfig error:", err);
+    }
+    return;
+  }
 
   if (!isGoogleSheetsConfigured() || !sheets || !spreadsheetId) {
     return;
@@ -446,7 +464,7 @@ export async function saveTeamsToSheets(leagueId: string, teams: Team[]): Promis
 
   if (isAppsScriptConfigured()) {
     try {
-      await callAppsScript("INIT_WORKBOOK", { teams });
+      await callAppsScript("SAVE_TEAMS", { teams });
     } catch (err) {
       console.warn("[SheetsRepository] Apps Script saveTeams error:", err);
     }
@@ -557,7 +575,7 @@ export async function savePlayersToSheets(leagueId: string, players: Player[]): 
 
   if (isAppsScriptConfigured()) {
     try {
-      await callAppsScript("INIT_WORKBOOK", { players });
+      await callAppsScript("SAVE_PLAYERS", { players });
     } catch (err) {
       console.warn("[SheetsRepository] Apps Script savePlayers error:", err);
     }

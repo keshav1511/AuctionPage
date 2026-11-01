@@ -50,21 +50,21 @@ export default function AdminSettingsPage() {
 
   // Category Base Prices
   const [categoryPrices, setCategoryPrices] = useState<Record<PlayerCategory, number>>({
-    ICON: auctionRules.iconBasePrice || 200000,
-    PLATINUM: auctionRules.platinumBasePrice || 100000,
-    GOLD: auctionRules.goldBasePrice || 50000,
-    SILVER: auctionRules.silverBasePrice || 25000,
-    EMERGING: auctionRules.emergingBasePrice || 15000,
+    ICON: auctionRules.iconBasePrice || 2000,
+    PLATINUM: auctionRules.platinumBasePrice || 2000,
+    GOLD: auctionRules.goldBasePrice || 2000,
+    SILVER: auctionRules.silverBasePrice || 2000,
+    EMERGING: auctionRules.emergingBasePrice || 2000,
   });
 
   // Dynamic Bid Slabs Table
   const [slabs, setSlabs] = useState<BidSlab[]>(auctionRules.bidSlabRules || DEFAULT_DYNAMIC_SLABS);
 
   // Team Squad Limits & Purse Rules
-  const [defaultPurse, setDefaultPurse] = useState<number>(5000000);
-  const [minSquadSize, setMinSquadSize] = useState<number>(auctionRules.minimumSquadSize || 15);
-  const [maxSquadSize, setMaxSquadSize] = useState<number>(18);
-  const [minimumBasePrice, setMinimumBasePrice] = useState<number>(auctionRules.minimumBasePrice || 25000);
+  const [defaultPurse, setDefaultPurse] = useState<number>(auctionRules.totalPurse || 100000);
+  const [minSquadSize, setMinSquadSize] = useState<number>(auctionRules.minimumSquadSize || 8);
+  const [maxSquadSize, setMaxSquadSize] = useState<number>(auctionRules.maximumSquadSize || 8);
+  const [minimumBasePrice, setMinimumBasePrice] = useState<number>(auctionRules.minimumBasePrice || auctionRules.basePrice || 2000);
   const [maxIconLimit, setMaxIconLimit] = useState<number>(2);
   const [maxPlatLimit, setMaxPlatLimit] = useState<number>(4);
   const [minEmergingLimit, setMinEmergingLimit] = useState<number>(3);

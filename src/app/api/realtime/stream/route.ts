@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const leagueId = searchParams.get("leagueId") || "league-ntl";
+  const leagueId = searchParams.get("leagueId") || "league-main";
 
   const state = await getAuthoritativeLeagueState(leagueId);
   if (!state) {

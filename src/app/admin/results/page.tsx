@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { AdminNav } from "@/components/admin/admin-nav";
 import { AdminHeader } from "@/components/admin/admin-header";
@@ -150,6 +150,12 @@ export default function AdminResultsPage() {
                 ))}
               </tbody>
             </table>
+
+            {players.length === 0 && (
+              <div className="p-12 text-center text-slate-400 text-xs">
+                No players in roster. Import players in Player Pool Management to track auction results.
+              </div>
+            )}
           </div>
         </main>
       </div>

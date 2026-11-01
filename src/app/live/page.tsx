@@ -598,12 +598,18 @@ export default function LiveAuctionStage() {
                   <div>
                     {/* Photo with 3:4 aspect ratio */}
                     <div className="relative w-full aspect-[3/4] rounded-xl overflow-hidden bg-slate-900 border border-slate-700/60 mb-2.5">
-                      <Image
-                        src={p.photoUrl}
-                        alt={p.fullName}
-                        fill
-                        className="object-cover"
-                      />
+                      {p.photoUrl ? (
+                        <Image
+                          src={p.photoUrl}
+                          alt={p.fullName}
+                          fill
+                          className="object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-slate-900 text-amber-400 font-bold text-2xl">
+                          {p.fullName.substring(0, 2).toUpperCase()}
+                        </div>
+                      )}
                       <div className="absolute top-2 left-2">
                         <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-black/70 text-amber-300 border border-amber-500/30">
                           #{idx + 1}
@@ -667,8 +673,10 @@ export default function LiveAuctionStage() {
         <div className="flex-1 flex items-center justify-center p-6 text-center">
           <div className="space-y-4 max-w-md">
             <Radio className="w-12 h-12 text-emerald-500 animate-pulse mx-auto" />
-            <h2 className="text-xl font-bold uppercase tracking-wider text-white">Live Auction Desk</h2>
-            <p className="text-xs text-slate-400">Waiting for auction lots to be initialized or selected by the auctioneer.</p>
+            <h2 className="text-xl font-bold uppercase tracking-wider text-white">Tournament Setup in Progress</h2>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Roster and Franchises are being prepared by tournament administration. The live spectator experience will activate once lots are called.
+            </p>
           </div>
         </div>
       </div>
@@ -742,13 +750,19 @@ export default function LiveAuctionStage() {
               {/* Photo Box */}
               <div className="sm:col-span-5 flex justify-center">
                 <div className="relative w-48 h-56 sm:w-56 sm:h-64 rounded-2xl overflow-hidden border-4 border-slate-700/60 shadow-2xl shadow-black/80 bg-slate-900">
-                  <Image
-                    src={player.photoUrl}
-                    alt={player.fullName}
-                    fill
-                    className="object-cover"
-                    priority
-                  />
+                  {player.photoUrl ? (
+                    <Image
+                      src={player.photoUrl}
+                      alt={player.fullName}
+                      fill
+                      className="object-cover"
+                      priority
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center bg-emerald-950 text-emerald-400 font-black text-5xl">
+                      {player.fullName.substring(0, 2).toUpperCase()}
+                    </div>
+                  )}
                   {/* Category ribbon across photo */}
                   <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/90 to-transparent py-2 px-3 text-center">
                     <span className="text-[11px] font-black tracking-widest text-amber-300 uppercase truncate block">

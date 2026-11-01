@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const leagueId = body.leagueId || "league-ntl";
+    const leagueId = body.leagueId || "league-main";
 
     // 1. Authenticate administrative privileges
     const auth = authenticateAdminActionRequest(req, leagueId);

@@ -113,13 +113,19 @@ export default function ResultsPage() {
                   <tr key={player.id} className="hover:bg-slate-900/50 transition-colors">
                     <td className="py-4 px-6">
                       <div className="flex items-center gap-3">
-                        <div className="relative w-10 h-10 rounded-lg overflow-hidden bg-slate-800 shrink-0">
-                          <Image
-                            src={player.photoUrl}
-                            alt={player.fullName}
-                            fill
-                            className="object-cover"
-                          />
+                        <div className="relative w-10 h-10 rounded-lg overflow-hidden bg-slate-800 shrink-0 flex items-center justify-center">
+                          {player.photoUrl ? (
+                            <Image
+                              src={player.photoUrl}
+                              alt={player.fullName}
+                              fill
+                              className="object-cover"
+                            />
+                          ) : (
+                            <span className="font-bold text-xs text-emerald-400">
+                              {player.fullName.substring(0, 2).toUpperCase()}
+                            </span>
+                          )}
                         </div>
                         <div>
                           <p className="font-bold text-white text-sm">{player.fullName}</p>

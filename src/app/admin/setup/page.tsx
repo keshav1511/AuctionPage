@@ -61,9 +61,11 @@ export default function TournamentSetupPage() {
   const [slug, setSlug] = useState(activeLeague.slug);
   const [description, setDescription] = useState(activeLeague.description || "");
   const [logoUrl, setLogoUrl] = useState(activeLeague.logoUrl || "");
-  const [matchDate, setMatchDate] = useState(activeLeague.matchDate || "2026-11-20");
-  const [matchVenue, setMatchVenue] = useState(activeLeague.matchVenue || "Perfect Pass, Falnir");
-  const [auctionDate, setAuctionDate] = useState(activeLeague.auctionDate || "2026-11-05");
+  const [orgName, setOrgName] = useState(activeLeague.orgName || "");
+  const [orgLogoUrl, setOrgLogoUrl] = useState(activeLeague.orgLogoUrl || "");
+  const [matchDate, setMatchDate] = useState(activeLeague.matchDate || "");
+  const [matchVenue, setMatchVenue] = useState(activeLeague.matchVenue || "");
+  const [auctionDate, setAuctionDate] = useState(activeLeague.auctionDate || "");
   const [auctionTime, setAuctionTime] = useState(activeLeague.auctionTime || "18:00");
   const [timezone, setTimezone] = useState(activeLeague.timezone || "Asia/Kolkata");
   const [googleSheetsUrl, setGoogleSheetsUrl] = useState(activeLeague.googleSheetsUrl || "");
@@ -73,6 +75,8 @@ export default function TournamentSetupPage() {
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const [showNewLeagueModal, setShowNewLeagueModal] = useState(false);
   const [newLeagueName, setNewLeagueName] = useState("");
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [isUploadingOrgLogo, setIsUploadingOrgLogo] = useState(false);
 
   // Data sources testing and sync states
   const [testingConnection, setTestingConnection] = useState(false);
@@ -89,9 +93,11 @@ export default function TournamentSetupPage() {
     setSlug(activeLeague.slug);
     setDescription(activeLeague.description || "");
     setLogoUrl(activeLeague.logoUrl || "");
-    setMatchDate(activeLeague.matchDate || "2026-11-20");
-    setMatchVenue(activeLeague.matchVenue || "Perfect Pass, Falnir");
-    setAuctionDate(activeLeague.auctionDate || "2026-11-05");
+    setOrgName(activeLeague.orgName || "");
+    setOrgLogoUrl(activeLeague.orgLogoUrl || "");
+    setMatchDate(activeLeague.matchDate || "");
+    setMatchVenue(activeLeague.matchVenue || "");
+    setAuctionDate(activeLeague.auctionDate || "");
     setAuctionTime(activeLeague.auctionTime || "18:00");
     setTimezone(activeLeague.timezone || "Asia/Kolkata");
     setGoogleSheetsUrl(activeLeague.googleSheetsUrl || "");
@@ -103,17 +109,35 @@ export default function TournamentSetupPage() {
     setRefreshError(null);
   }, [activeLeague]);
 
-  // Handle local logo file upload
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          setLogoUrl(event.target.result as string);
-        }
-      };
-      reader.readAsDataURL(file);
+  // Handle local logo file upload via /api/media/upload -> Google Drive
+  const handleUploadDriveMedia = async (
+    file: File,
+    setter: (url: string) => void,
+    setLoading: (l: boolean) => void
+  ) => {
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("folder", "league");
+
+      const res = await fetch("/api/media/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to upload image");
+      }
+
+      setter(data.url);
+      setSavedNotice("Uploaded image to Google Drive.");
+      setTimeout(() => setSavedNotice(null), 3000);
+    } catch (err) {
+      alert((err as Error).message || "Failed to upload image");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -124,6 +148,8 @@ export default function TournamentSetupPage() {
       slug,
       description,
       logoUrl,
+      orgName,
+      orgLogoUrl,
       matchDate,
       matchVenue,
       auctionDate,
@@ -210,10 +236,12 @@ export default function TournamentSetupPage() {
       name: newLeagueName,
       slug: newLeagueName.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
       description: "Custom tournament championship",
-      logoUrl: "https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?w=200&auto=format&fit=crop&q=80",
-      matchDate: "2026-12-01",
-      matchVenue: "City Arena",
-      auctionDate: "2026-11-20",
+      logoUrl: "",
+      orgName: "",
+      orgLogoUrl: "",
+      matchDate: "",
+      matchVenue: "",
+      auctionDate: "",
       auctionTime: "18:00",
       timezone: "Asia/Kolkata",
       googleSheetsUrl: "",
@@ -319,7 +347,7 @@ export default function TournamentSetupPage() {
                         setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, "-"));
                       }}
                       required
-                      placeholder="e.g. Nalanda Turf League"
+                      placeholder="e.g. Premier Cricket Championship"
                       className="bg-white border-slate-300 text-xs"
                     />
                   </div>
@@ -329,7 +357,7 @@ export default function TournamentSetupPage() {
                     <Input
                       value={slug}
                       onChange={(e) => setSlug(e.target.value)}
-                      placeholder="e.g. nalanda-turf-league"
+                      placeholder="e.g. premier-cricket-championship"
                       className="bg-slate-50 border-slate-300 font-mono text-xs text-slate-600"
                     />
                   </div>
@@ -364,39 +392,79 @@ export default function TournamentSetupPage() {
                   </div>
                 </div>
 
-                {/* Tournament Logo Upload & Preview */}
-                <div className="space-y-2 pt-2">
-                  <label className="text-xs font-semibold text-slate-700">Tournament Logo</label>
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl">
-                    <div className="w-16 h-16 rounded-xl border border-slate-200 bg-white flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
-                      {logoUrl ? (
-                        <img src={logoUrl} alt="Logo" className="w-full h-full object-cover" />
-                      ) : (
-                        <Trophy className="w-6 h-6 text-slate-400" />
-                      )}
-                    </div>
-                    <div className="flex-1 space-y-2 w-full">
-                      <div className="flex items-center gap-3">
-                        <label className="cursor-pointer">
-                          <span className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5 shadow-sm">
-                            <Upload className="w-3.5 h-3.5 text-slate-500" />
-                            Upload from Computer
+                {/* Tournament Logo & Organization Logos */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                  <div className="space-y-2 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                    <label className="text-xs font-semibold text-slate-700 block">Tournament Logo</label>
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-lg bg-white border border-slate-200 flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
+                        {logoUrl ? (
+                          <img src={logoUrl} alt="Logo" className="w-full h-full object-contain p-0.5" />
+                        ) : (
+                          <Trophy className="w-5 h-5 text-slate-400" />
+                        )}
+                      </div>
+                      <div className="flex-1 space-y-1.5">
+                        <label className="cursor-pointer inline-block">
+                          <span className="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5 shadow-sm">
+                            <Upload className="w-3 h-3 text-slate-500" />
+                            {isUploadingLogo ? "Uploading..." : "Upload Logo"}
                           </span>
                           <input
                             type="file"
                             accept="image/*"
-                            onChange={handleLogoUpload}
+                            disabled={isUploadingLogo}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleUploadDriveMedia(file, setLogoUrl, setIsUploadingLogo);
+                            }}
                             className="hidden"
                           />
                         </label>
-                        <span className="text-xs text-slate-400">or enter image URL below</span>
+                        <Input
+                          value={logoUrl}
+                          onChange={(e) => setLogoUrl(e.target.value)}
+                          placeholder="or paste image URL"
+                          className="bg-white border-slate-300 font-mono text-[11px] h-7"
+                        />
                       </div>
-                      <Input
-                        value={logoUrl}
-                        onChange={(e) => setLogoUrl(e.target.value)}
-                        placeholder="https://... logo image url"
-                        className="bg-white border-slate-300 font-mono text-xs"
-                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                    <label className="text-xs font-semibold text-slate-700 block">Organization / Club</label>
+                    <Input
+                      value={orgName}
+                      onChange={(e) => setOrgName(e.target.value)}
+                      placeholder="e.g. Sports Club / Host Body"
+                      className="bg-white border-slate-300 text-xs h-7 mb-1.5"
+                    />
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
+                        {orgLogoUrl ? (
+                          <img src={orgLogoUrl} alt="Org" className="w-full h-full object-contain p-0.5" />
+                        ) : (
+                          <ShieldCheck className="w-4 h-4 text-slate-400" />
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <label className="cursor-pointer inline-block">
+                          <span className="px-2 py-0.5 rounded border border-slate-300 bg-white hover:bg-slate-100 text-[10px] font-semibold text-slate-700 inline-flex items-center gap-1">
+                            <Upload className="w-2.5 h-2.5 text-slate-500" />
+                            {isUploadingOrgLogo ? "Uploading..." : "Upload Org Logo"}
+                          </span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            disabled={isUploadingOrgLogo}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleUploadDriveMedia(file, setOrgLogoUrl, setIsUploadingOrgLogo);
+                            }}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -417,7 +485,7 @@ export default function TournamentSetupPage() {
                       value={matchVenue}
                       onChange={(e) => setMatchVenue(e.target.value)}
                       required
-                      placeholder="e.g. Perfect Pass, Falnir"
+                      placeholder="e.g. Sports Arena, Main Stadium"
                       className="bg-white border-slate-300 text-xs"
                     />
                   </div>
@@ -797,6 +865,7 @@ export default function TournamentSetupPage() {
         onClose={() => setShowImportModal(false)}
         defaultSheetUrl={googleSheetsUrl}
         defaultDriveUrl={googleDriveFolderUrl}
+        defaultBasePrice={activeLeague.defaultBasePrice || 2000}
         activeLeagueId={activeLeague.id}
       />
     </div>

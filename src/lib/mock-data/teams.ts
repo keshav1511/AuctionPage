@@ -1,4 +1,4 @@
 import { Team } from "@/types";
-import { NTL_TEAMS } from "@/config/ntl-season-1";
+import { INITIAL_TEAMS } from "@/config/default-config";
 
-export const MOCK_TEAMS: Team[] = NTL_TEAMS;
+export const MOCK_TEAMS: Team[] = INITIAL_TEAMS;

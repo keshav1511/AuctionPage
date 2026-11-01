@@ -54,12 +54,12 @@ export function detectRegistrationColumns(
     return "";
   };
 
-  const nameCol = findHeader(["name", "playername", "fullname", "athlete"], 0);
-  const photoCol = findHeader(["photolink", "photo", "image", "picture", "imagelink", "photourl"], 1);
-  const typeCol = findHeader(["playericonowner", "type", "roleorowner", "categoryortype", "designation"], 2);
+  const nameCol = findHeader(["name", "playername", "fullname", "athlete", "player"], 0);
+  const photoCol = findHeader(["photolink", "photo", "image", "picture", "imagelink", "photourl"], headers.length >= 4 ? 1 : undefined);
+  const typeCol = findHeader(["playericonowner", "type", "roleorowner", "categoryortype", "designation"], headers.length >= 4 ? 2 : undefined);
 
   // For Team column: check alias, or if Col 4 exists and has team values
-  let teamCol = findHeader(["team", "teamname", "franchise", "club", "teamaffiliation"], 3);
+  let teamCol = findHeader(["team", "teamname", "franchise", "club", "teamaffiliation"], headers.length >= 4 ? 3 : undefined);
 
   // If teamCol was blank (e.g. Col 4 header is empty string ""), check if sample rows have data in col 3
   if (!teamCol && headers.length >= 4) {
@@ -115,15 +115,17 @@ export function normalizePlayerRole(val?: string): PlayerRole {
 export function parseRegistrationRows(
   headers: string[],
   rows: (string | number | null | undefined)[][],
-  customMapping?: Partial<ColumnMappingConfig>
+  customMapping?: Partial<ColumnMappingConfig>,
+  defaultBasePrice?: number
 ): RegistrationValidationSummary {
   const mapping = {
     ...detectRegistrationColumns(headers, rows),
     ...customMapping,
   };
 
-  const getVal = (row: (string | number | null | undefined)[], colHeader: string, fallbackIdx?: number): string => {
-    let colIdx = headers.indexOf(colHeader);
+  const getVal = (row: (string | number | null | undefined)[], colHeader?: string, fallbackIdx?: number): string => {
+    if (!colHeader && fallbackIdx === undefined) return "";
+    let colIdx = colHeader ? headers.indexOf(colHeader) : -1;
     if (colIdx === -1 && fallbackIdx !== undefined) {
       colIdx = fallbackIdx;
     }
@@ -152,9 +154,9 @@ export function parseRegistrationRows(
 
     // Extract raw fields
     const rawName = getVal(row, mapping.nameCol, 0);
-    const rawPhoto = getVal(row, mapping.photoCol, 1);
-    const rawType = getVal(row, mapping.typeCol, 2);
-    const rawTeam = getVal(row, mapping.teamCol, 3);
+    const rawPhoto = mapping.photoCol ? getVal(row, mapping.photoCol) : "";
+    const rawType = mapping.typeCol ? getVal(row, mapping.typeCol) : "";
+    const rawTeam = mapping.teamCol ? getVal(row, mapping.teamCol) : "";
     const rawCategory = mapping.categoryCol ? getVal(row, mapping.categoryCol) : "";
     const rawRole = mapping.roleCol ? getVal(row, mapping.roleCol) : "";
     const rawPrice = mapping.priceCol ? getVal(row, mapping.priceCol) : "";
@@ -219,9 +221,9 @@ export function parseRegistrationRows(
     // 5. Parse Price & Category
     const category = type === "ICON" ? "ICON" : normalizePlayerCategory(rawCategory);
     const role = normalizePlayerRole(rawRole);
-    let basePrice: number = 25000;
+    let basePrice: number = defaultBasePrice || 2000;
     if (type === "ICON") {
-      basePrice = 200000;
+      basePrice = Math.max(defaultBasePrice || 2000, 50000);
     } else if (rawPrice) {
       const parsedNum = parseInt(rawPrice.replace(/[^0-9]/g, ""), 10);
       if (!isNaN(parsedNum) && parsedNum > 0) basePrice = parsedNum;

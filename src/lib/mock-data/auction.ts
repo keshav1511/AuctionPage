@@ -1,15 +1,15 @@
 import { AuctionSession, AuctionRules, Bid } from "@/types";
-import { NTL_PLAYERS, NTL_DEFAULT_RULES } from "@/config/ntl-season-1";
+import { DEFAULT_AUCTION_RULES } from "@/config/default-config";
 
-export const MOCK_RULES: AuctionRules = NTL_DEFAULT_RULES;
+export const MOCK_RULES: AuctionRules = DEFAULT_AUCTION_RULES;
 
 export const MOCK_RECENT_BIDS: Bid[] = [];
 
 export const MOCK_AUCTION_SESSION: AuctionSession = {
-  id: "auction-league-ntl",
-  seasonId: "league-ntl",
-  currentPlayerId: NTL_PLAYERS[0].id,
-  currentPlayer: NTL_PLAYERS[0],
+  id: "auction-main",
+  seasonId: "league-main",
+  currentPlayerId: null,
+  currentPlayer: null,
   currentHighestBid: 0,
   currentLeadingTeamId: null,
   currentLeadingTeam: null,

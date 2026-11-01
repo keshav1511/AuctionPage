@@ -131,8 +131,8 @@ export async function initializeLeagueWorkbook(
     // Auction_State initial row
     const initialAuctionRows: string[][] = [
       serializeAuctionState({
-        id: `auction-${initialData?.league?.id || "league-ntl"}`,
-        seasonId: initialData?.league?.id || "league-ntl",
+        id: `auction-${initialData?.league?.id || "league-main"}`,
+        seasonId: initialData?.league?.id || "league-main",
         status: "IDLE",
         currentPlayerId: initialData?.players?.[0]?.id || null,
         currentHighestBid: 0,

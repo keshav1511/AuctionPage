@@ -18,6 +18,7 @@ import {
   getEligibleRound2Players,
 } from "@/lib/auction/round-manager";
 import { Team, Player } from "@/types";
+import Link from "next/link";
 import {
   Gavel,
   RotateCcw,
@@ -26,7 +27,6 @@ import {
   XCircle,
   Clock,
   ChevronRight,
-  User,
   Radio,
   Sparkles,
   Users,
@@ -59,29 +59,18 @@ export default function AuctionControlDesk() {
   const actionNotice = lastActionMessage || localNotice;
   const isPaused = session.status === "PAUSED";
 
-  const currentPlayer: Player = useMemo(
-    () =>
-      session.currentPlayer ||
-      livePlayers[activePlayerIndex] || {
-        id: "fallback-p1",
-        seasonId: activeLeague.id,
-        registrationNo: "NTL-001",
-        fullName: "Ashwin Pai",
-        category: "ICON",
-        primaryRole: "ALL_ROUNDER",
-        battingStyle: "Right-Hand Bat",
-        bowlingStyle: "Right-Arm Medium",
-        photoUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=600&auto=format&fit=crop&q=80",
-        basePrice: 200000,
-        status: "ON_AUCTION",
-        sortOrder: 1,
-      },
-    [session.currentPlayer, livePlayers, activePlayerIndex, activeLeague.id]
+  const currentPlayer: Player | null = useMemo(
+    () => session.currentPlayer || livePlayers[activePlayerIndex] || null,
+    [session.currentPlayer, livePlayers, activePlayerIndex]
   );
+
+  const basePriceForPlayer = currentPlayer
+    ? (currentPlayer.basePriceOverride || currentPlayer.basePrice || liveRules.basePrice || 2000)
+    : (liveRules.basePrice || 2000);
 
   const { nextBid, step: currentStep } = calculateNextBid(
     session.currentHighestBid,
-    currentPlayer.basePriceOverride || currentPlayer.basePrice
+    basePriceForPlayer
   );
 
   // Authoritative purse reserve and bidding eligibility analysis for all franchises
@@ -93,7 +82,7 @@ export default function AuctionControlDesk() {
       );
       analysisMap[team.id] = analyzeTeamBiddingEligibility(team, {
         rules: liveRules,
-        currentPlayer,
+        currentPlayer: currentPlayer || undefined,
         nextBidAmount: nextBid,
         isCurrentLeadingTeam: session.currentLeadingTeamId === team.id,
         allPurchasedPlayersForTeam: purchasedForTeam,
@@ -107,18 +96,19 @@ export default function AuctionControlDesk() {
    */
   const handleMarkUnsold = useCallback(
     async (reason: string = "Passed by Auctioneer") => {
+      if (!currentPlayer) return;
       await markUnsold(reason);
     },
-    [markUnsold]
+    [markUnsold, currentPlayer]
   );
 
   // Auto-unsold trigger when countdown reaches zero with 0 bids
   useEffect(() => {
     if (isPaused || session.status === "FINISHED" || session.status === "IDLE") return;
-    if (remainingSeconds === 0 && session.bidCount === 0 && currentPlayer.status === "ON_AUCTION") {
+    if (remainingSeconds === 0 && session.bidCount === 0 && currentPlayer?.status === "ON_AUCTION") {
       handleMarkUnsold("No bids received within countdown window");
     }
-  }, [remainingSeconds, isPaused, session.status, session.bidCount, currentPlayer.status, handleMarkUnsold]);
+  }, [remainingSeconds, isPaused, session.status, session.bidCount, currentPlayer, handleMarkUnsold]);
 
   /**
    * Submits a bid for a specific franchise (1-Click Team Logo Bidding)
@@ -489,62 +479,79 @@ export default function AuctionControlDesk() {
           {/* Top Split: Active Player Card & Standing Bid / Timer */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* Active Player Card */}
-            <Card className="lg:col-span-6 bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
-              <CardContent className="p-6">
-                <div className="flex items-start gap-5">
-                  <div className="w-28 h-36 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden shrink-0 shadow-sm flex items-center justify-center">
-                    {currentPlayer.photoUrl ? (
-                      <img
-                        src={currentPlayer.photoUrl}
-                        alt={currentPlayer.fullName}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <User className="w-10 h-10 text-slate-300" />
-                    )}
-                  </div>
-
-                  <div className="min-w-0 flex-1 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getCategoryBadgeColor(currentPlayer.category)}`}>
-                        {currentPlayer.category}
-                      </span>
-                      <span className="font-mono text-xs text-slate-400">
-                        {currentPlayer.registrationNo}
-                      </span>
-                      {session.round === 2 && (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                          ROUND 2
-                        </span>
+            {!currentPlayer ? (
+              <Card className="lg:col-span-6 bg-white border border-slate-200 shadow-sm rounded-2xl p-8 flex items-center justify-center text-center">
+                <div className="space-y-3 max-w-sm">
+                  <Users className="w-10 h-10 text-slate-300 mx-auto" />
+                  <h3 className="text-base font-bold text-slate-900">No Active Lot in Auction</h3>
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    Select a player lot or import your tournament roster in Player Management to begin bidding.
+                  </p>
+                  <Button asChild size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs">
+                    <Link href="/admin/players">Import Players</Link>
+                  </Button>
+                </div>
+              </Card>
+            ) : (
+              <Card className="lg:col-span-6 bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
+                <CardContent className="p-6">
+                  <div className="flex items-start gap-5">
+                    <div className="w-28 h-36 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden shrink-0 shadow-sm flex items-center justify-center">
+                      {currentPlayer.photoUrl ? (
+                        <img
+                          src={currentPlayer.photoUrl}
+                          alt={currentPlayer.fullName}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full bg-emerald-50 flex items-center justify-center text-emerald-800 font-bold text-lg">
+                          {currentPlayer.fullName.substring(0, 2).toUpperCase()}
+                        </div>
                       )}
                     </div>
 
-                    <h2 className="text-xl font-bold text-slate-900 leading-tight">
-                      {currentPlayer.fullName}
-                    </h2>
-
-                    <div className="text-xs text-slate-600">
-                      {formatRole(currentPlayer.primaryRole)} • {currentPlayer.battingStyle || "Right-Hand Bat"}
-                    </div>
-
-                    <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                      <div>
-                        <span className="text-[10px] text-slate-400 uppercase font-bold block">Base Price</span>
-                        <span className="font-mono font-bold text-slate-700">
-                          {formatCurrency(currentPlayer.basePriceOverride || currentPlayer.basePrice)}
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getCategoryBadgeColor(currentPlayer.category)}`}>
+                          {currentPlayer.category}
                         </span>
+                        <span className="font-mono text-xs text-slate-400">
+                          {currentPlayer.registrationNo}
+                        </span>
+                        {session.round === 2 && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                            ROUND 2
+                          </span>
+                        )}
                       </div>
-                      <div className="text-right">
-                        <span className="text-[10px] text-slate-400 uppercase font-bold block">Next Valid Bid</span>
-                        <span className="font-mono font-bold text-emerald-700 text-sm">
-                          {formatCurrency(nextBid)}
-                        </span>
+
+                      <h2 className="text-xl font-bold text-slate-900 leading-tight">
+                        {currentPlayer.fullName}
+                      </h2>
+
+                      <div className="text-xs text-slate-600">
+                        {formatRole(currentPlayer.primaryRole)} • {currentPlayer.battingStyle || "Right-Hand Bat"}
+                      </div>
+
+                      <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                        <div>
+                          <span className="text-[10px] text-slate-400 uppercase font-bold block">Base Price</span>
+                          <span className="font-mono font-bold text-slate-700">
+                            {formatCurrency(currentPlayer.basePriceOverride || currentPlayer.basePrice)}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] text-slate-400 uppercase font-bold block">Next Valid Bid</span>
+                          <span className="font-mono font-bold text-emerald-700 text-sm">
+                            {formatCurrency(nextBid)}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Standing Bid & Countdown Timer Card */}
             <Card className="lg:col-span-6 bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden flex flex-col justify-between">
@@ -769,8 +776,9 @@ export default function AuctionControlDesk() {
               <div className="pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Button
                   onClick={handleHammerDown}
+                  disabled={!currentPlayer || session.bidCount === 0 || !session.currentLeadingTeam}
                   size="lg"
-                  className="w-full gap-2 font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+                  className="w-full gap-2 font-bold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white shadow-sm"
                 >
                   <Gavel className="w-5 h-5 fill-white" />
                   HAMMER DOWN (SOLD • ENTER)
@@ -778,9 +786,10 @@ export default function AuctionControlDesk() {
 
                 <Button
                   onClick={() => handleMarkUnsold("Manual passed by auctioneer")}
+                  disabled={!currentPlayer}
                   size="lg"
                   variant="outline"
-                  className="w-full gap-2 font-semibold border-slate-300 text-slate-700 hover:bg-slate-50"
+                  className="w-full gap-2 font-semibold border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                 >
                   <XCircle className="w-5 h-5 text-slate-400" />
                   PASS LOT (MARK UNSOLD)

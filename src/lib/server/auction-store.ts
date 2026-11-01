@@ -297,7 +297,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
       ...config.league,
       ...payload.league,
       id: leagueId,
-      name: payload.league.name || config.league.name || "Nalanda Turf League",
+      name: payload.league.name || config.league.name || "Cricket Auction",
       primaryColor: payload.league.primaryColor || config.league.primaryColor || "#059669",
       secondaryColor: payload.league.secondaryColor || config.league.secondaryColor || "#F59E0B",
     };

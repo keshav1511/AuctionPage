@@ -54,14 +54,14 @@ export default function AdminDashboardPage() {
     {
       title: "Player Registry & Categories",
       subtitle: `${players.length} players imported via Sheets / Excel`,
-      passed: players.length >= 10,
+      passed: players.length >= 2,
       href: "/admin/players",
       actionLabel: "Import Roster",
     },
     {
       title: "Player & Owner Photographs",
-      subtitle: `${matchedPhotosCount}/${players.length} photos verified from Drive`,
-      passed: matchedPhotosCount >= 6,
+      subtitle: `${matchedPhotosCount}/${players.length} photos linked`,
+      passed: players.length > 0 && matchedPhotosCount > 0,
       href: "/admin/players",
       actionLabel: "Match Photos",
     },
