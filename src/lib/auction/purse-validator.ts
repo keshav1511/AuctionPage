@@ -141,12 +141,12 @@ export function analyzeTeamBiddingEligibility(
     allPurchasedPlayersForTeam = [],
   } = options;
 
-  // Determine actual players purchased
-  // Uses actual valid purchased players list if provided, otherwise team.squadCount
+  // Determine effective total squad size (pre-assigned owner & icon + auction acquisitions)
+  const preAssignedCount = (team.ownerName ? 1 : 0) + (team.iconPlayerName ? 1 : 0);
   const playersPurchased =
     allPurchasedPlayersForTeam.length > 0
-      ? allPurchasedPlayersForTeam.length
-      : team.squadCount || 0;
+      ? preAssignedCount + allPurchasedPlayersForTeam.length
+      : (team.squadCount || preAssignedCount);
 
   // Team remaining purse
   const remainingPurse = team.purse?.remainingAmount ?? 5000000;

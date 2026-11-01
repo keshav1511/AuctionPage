@@ -77,7 +77,7 @@ export default function TeamsPage() {
                       {formatCurrency(team.purse?.remainingAmount || 0, true)}
                     </div>
                     <div className="text-[10px] text-slate-400">
-                      {team.squadCount || 0}/18 Players
+                      {(team.squadCount ?? ((team.ownerName ? 1 : 0) + (team.iconPlayerName ? 1 : 0) + players.filter((p) => p.soldToTeamId === team.id).length))} / {team.purse?.minPlayers || 8} Players
                     </div>
                   </button>
                 );
@@ -155,10 +155,10 @@ export default function TeamsPage() {
                 <div className="lg:col-span-7 space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-lg font-black text-white uppercase tracking-wide">
-                      Signed Squad Roster ({acquiredPlayers.length})
+                      Signed Auction Roster ({acquiredPlayers.length})
                     </h3>
                     <Badge variant="outline" className="font-mono text-xs">
-                      Minimum Required: 15
+                      Total Squad: {((selectedTeam?.ownerName ? 1 : 0) + (selectedTeam?.iconPlayerName ? 1 : 0) + acquiredPlayers.length)} / {selectedTeam?.purse?.minPlayers || 8}
                     </Badge>
                   </div>
 

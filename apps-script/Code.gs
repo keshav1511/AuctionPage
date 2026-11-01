@@ -29,14 +29,12 @@
  * ==============================================================================
  */
 
-const DEFAULT_SECRET = "ntl_season_1_secret_key_2026";
-
 function getSharedSecret() {
   try {
     const props = PropertiesService.getScriptProperties();
-    return props.getProperty("APPS_SCRIPT_SHARED_SECRET") || DEFAULT_SECRET;
+    return props.getProperty("APPS_SCRIPT_SHARED_SECRET");
   } catch (e) {
-    return DEFAULT_SECRET;
+    return null;
   }
 }
 
@@ -47,11 +45,11 @@ function jsonResponse(data, statusCode) {
 }
 
 function doGet(e) {
+  // Health check only: do NOT expose spreadsheet ID to unauthenticated GET requests
   return jsonResponse({
     status: "online",
     system: "Nalanda Turf League Season 1 Auction Bridge",
     timestamp: new Date().toISOString(),
-    spreadsheetId: SpreadsheetApp.getActiveSpreadsheet().getId(),
   });
 }
 
@@ -64,10 +62,17 @@ function doPost(e) {
     const payload = JSON.parse(e.postData.contents);
     const { secret, action, data } = payload;
 
-    // Verify Shared Secret
+    // Verify Shared Secret (MANDATORY)
     const expectedSecret = getSharedSecret();
-    if (expectedSecret && secret !== expectedSecret) {
-      return jsonResponse({ success: false, error: "Unauthorized: Invalid shared secret" }, 401);
+    if (!expectedSecret) {
+      return jsonResponse({
+        success: false,
+        error: "Configuration Error: APPS_SCRIPT_SHARED_SECRET is not configured in Script Properties. Configure it in Project Settings -> Script Properties."
+      }, 500);
+    }
+
+    if (!secret || typeof secret !== "string" || secret.trim() !== expectedSecret.trim()) {
+      return jsonResponse({ success: false, error: "Unauthorized: Invalid or missing shared secret" }, 401);
     }
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();

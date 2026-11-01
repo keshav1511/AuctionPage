@@ -1273,16 +1273,17 @@ export async function reconcileLeaguePurchasesAndPurses(
       const currentPurse = team.purse || {
         id: `purse-${team.id}`,
         teamId: team.id,
-        totalBudget: 5000000,
+        totalBudget: 100000,
         spentAmount: 0,
-        remainingAmount: 5000000,
-        minPlayers: 15,
-        maxPlayers: 18,
-        reservedForSquad: 350000,
+        remainingAmount: 100000,
+        minPlayers: 8,
+        maxPlayers: 8,
+        reservedForSquad: 12000,
       };
       const spent = teamSpendMap.get(team.id) || 0;
-      const expectedRemaining = Math.max(0, (currentPurse.totalBudget || 5000000) - spent);
-      const expectedPlayersCount = teamPlayerCountMap.get(team.id) || 0;
+      const expectedRemaining = Math.max(0, (currentPurse.totalBudget || 100000) - spent);
+      const preAssigned = (team.ownerName ? 1 : 0) + (team.iconPlayerName ? 1 : 0);
+      const expectedPlayersCount = (teamPlayerCountMap.get(team.id) || 0) + preAssigned;
 
       if (
         currentPurse.remainingAmount !== expectedRemaining ||

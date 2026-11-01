@@ -340,8 +340,11 @@ export default function LiveAuctionStage() {
             <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
               {liveTeams.map((t) => {
                 const isSelected = activeFinaleTeam?.id === t.id;
-                const teamSquad = livePlayers.filter((p) => p.soldToTeamId === t.id);
-                const isComplete = teamSquad.length >= (t.purse?.minPlayers || 15);
+                const auctionSquad = livePlayers.filter((p) => p.soldToTeamId === t.id);
+                const preAssignedCount = (t.ownerName ? 1 : 0) + (t.iconPlayerName ? 1 : 0);
+                const totalSquadCount = preAssignedCount + auctionSquad.length;
+                const minSquad = t.purse?.minPlayers || 8;
+                const isComplete = totalSquadCount >= minSquad;
 
                 return (
                   <button
@@ -362,7 +365,7 @@ export default function LiveAuctionStage() {
                     </div>
                     <span className="text-xs uppercase font-extrabold truncate max-w-[140px]">{t.name}</span>
                     <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${isComplete ? "bg-purple-900/80 text-purple-200 border border-purple-500/40" : "bg-slate-800 text-slate-400"}`}>
-                      {teamSquad.length}
+                      {totalSquadCount}/{minSquad}
                     </span>
                   </button>
                 );
@@ -450,10 +453,10 @@ export default function LiveAuctionStage() {
               <div className="my-6">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-sm font-extrabold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                    <Users className="w-4 h-4 text-amber-400" /> Complete Roster ({activeFinaleTeamPlayers.length} Players)
+                    <Users className="w-4 h-4 text-amber-400" /> Auction Signings ({activeFinaleTeamPlayers.length} / 6 Acquired)
                   </h3>
                   <span className="text-xs text-emerald-400 font-mono font-bold">
-                    Quota: {activeFinaleTeamPlayers.length} / {activeFinaleTeam.purse?.minPlayers || 15}
+                    Total Squad: {activeFinaleTeamPlayers.length + ((activeFinaleTeam.ownerName ? 1 : 0) + (activeFinaleTeam.iconPlayerName ? 1 : 0))} / {activeFinaleTeam.purse?.minPlayers || 8}
                   </span>
                 </div>
 
@@ -922,7 +925,7 @@ export default function LiveAuctionStage() {
               <h3 className="font-black text-white text-sm uppercase tracking-wider flex items-center gap-2">
                 <Zap className="w-4 h-4 text-emerald-400" /> Franchise Purse Scoreboard
               </h3>
-              <span className="text-xs text-slate-400">Budget Cap: ₹50,00,000 / Team</span>
+              <span className="text-xs text-slate-400">Budget Cap: {formatCurrency(liveTeams[0]?.purse?.totalBudget || 100000)} / Team</span>
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -947,7 +950,7 @@ export default function LiveAuctionStage() {
                         </span>
                       </div>
                       <span className="text-[10px] font-mono text-slate-400">
-                        {t.squadCount}/18
+                        {t.squadCount}/{t.purse.minPlayers || 8}
                       </span>
                     </div>
 

@@ -15,8 +15,10 @@ export interface AppsScriptResponse<T = unknown> {
 
 export function isAppsScriptConfigured(): boolean {
   const url = process.env.APPS_SCRIPT_WEB_APP_URL;
-  if (!url) return false;
+  const secret = process.env.APPS_SCRIPT_SHARED_SECRET;
+  if (!url || !secret) return false;
   if (url.includes("your-script-id") || url.includes("example.com")) return false;
+  if (secret.trim().length === 0 || secret === "ntl_season_1_secret_key_2026") return false;
   return url.startsWith("https://script.google.com/macros/s/");
 }
 
@@ -25,11 +27,11 @@ export async function callAppsScript<T = unknown>(
   data?: unknown
 ): Promise<T> {
   const url = process.env.APPS_SCRIPT_WEB_APP_URL;
-  const secret = process.env.APPS_SCRIPT_SHARED_SECRET || "ntl_season_1_secret_key_2026";
+  const secret = process.env.APPS_SCRIPT_SHARED_SECRET;
 
-  if (!url || !isAppsScriptConfigured()) {
+  if (!url || !secret || !isAppsScriptConfigured()) {
     throw new Error(
-      "[AppsScriptClient] APPS_SCRIPT_WEB_APP_URL is not configured in environment variables. Please deploy apps-script/Code.gs as a Web App and configure APPS_SCRIPT_WEB_APP_URL."
+      "[AppsScriptClient] Both APPS_SCRIPT_WEB_APP_URL and a strong APPS_SCRIPT_SHARED_SECRET must be configured in environment variables. Default or blank secrets are rejected."
     );
   }
 

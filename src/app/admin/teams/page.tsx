@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState } from "react";
 import { AdminNav } from "@/components/admin/admin-nav";
@@ -297,19 +297,19 @@ export default function AdminTeamsPage() {
                     <div className="flex justify-between items-center">
                       <span className="text-slate-500">Purse Budget:</span>
                       <span className="font-mono font-bold text-slate-900">
-                        {formatCurrency(team.purse?.totalBudget || 5000000)}
+                        {formatCurrency(team.purse?.totalBudget || 100000)}
                       </span>
                     </div>
                     <div className="flex justify-between items-center text-[11px]">
                       <span className="text-slate-500">Spent / Remaining:</span>
                       <span className="font-mono text-emerald-700 font-semibold">
-                        {formatCurrency(team.purse?.remainingAmount || 5000000, true)} Left
+                        {formatCurrency(team.purse?.remainingAmount || 100000, true)} Left
                       </span>
                     </div>
                     <div className="flex justify-between items-center text-[11px]">
                       <span className="text-slate-500">Squad Target:</span>
                       <span className="font-mono text-slate-700">
-                        {team.squadCount || 0} / {team.purse?.maxPlayers || 18} (Min: {team.purse?.minPlayers || 15})
+                        {team.squadCount || 0} / {team.purse?.maxPlayers || 8} (Min: {team.purse?.minPlayers || 8})
                       </span>
                     </div>
                   </div>
