@@ -51,6 +51,7 @@ export default function AuctionControlDesk() {
     undo,
     initRound2,
     startRound2,
+    refreshState,
   } = useRealtimeAuction(activeLeague.id);
 
   const [activePlayerIndex, setActivePlayerIndex] = useState(0);
@@ -289,6 +290,21 @@ export default function AuctionControlDesk() {
             </div>
           }
         />
+
+        {!isConnected && (
+          <div className="bg-amber-50 border-b border-amber-200 text-amber-800 text-xs py-2 px-6 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
+              <span>Persistence Bridge Disconnected — Attempting to reconnect to Google Apps Script...</span>
+            </div>
+            <button
+              onClick={() => refreshState()}
+              className="text-[11px] font-bold text-amber-900 underline hover:text-amber-700"
+            >
+              Retry Connection
+            </button>
+          </div>
+        )}
 
         <main className="p-6 sm:p-8 space-y-6 max-w-6xl">
           {actionNotice && (

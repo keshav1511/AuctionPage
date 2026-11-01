@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getAuthoritativeLeagueState, subscribeToAuctionEvents, AuctionRealtimeEvent } from "@/lib/server/auction-store";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 25;
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -50,14 +51,14 @@ export async function GET(req: NextRequest) {
         }
       });
 
-      // 3. Keep-alive heartbeat every 15s to prevent proxy timeouts
+      // 3. Keep-alive heartbeat every 10s to prevent proxy timeouts
       const heartbeat = setInterval(() => {
         try {
           controller.enqueue(encoder.encode(`: heartbeat\n\n`));
         } catch {
           clearInterval(heartbeat);
         }
-      }, 15000);
+      }, 10000);
 
       // 4. Serverless cross-instance sync check every 2.5s
       let lastKnownStateSummary = `${state.session.status}-${state.session.currentPlayerId}-${state.session.currentHighestBid}-${state.session.bidCount}`;
@@ -84,11 +85,24 @@ export async function GET(req: NextRequest) {
         } catch {}
       }, 2500);
 
-      // 5. Handle client disconnection
-      req.signal.addEventListener("abort", () => {
+      const cleanup = () => {
         clearInterval(heartbeat);
         clearInterval(crossInstanceSync);
         unsubscribe();
+      };
+
+      // 5. Graceful close before Vercel serverless function execution limit
+      const lifetimeTimeout = setTimeout(() => {
+        cleanup();
+        try {
+          controller.close();
+        } catch {}
+      }, 20000);
+
+      // 6. Handle client disconnection
+      req.signal.addEventListener("abort", () => {
+        clearTimeout(lifetimeTimeout);
+        cleanup();
         try {
           controller.close();
         } catch {}

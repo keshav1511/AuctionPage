@@ -219,9 +219,129 @@ function buildAuctionSession(
   };
 }
 
+// Coalesce in-flight timer resolution to guarantee an expired lot is processed exactly once
+const inFlightTimerResolutions = new Map<string, Promise<{ success: boolean; actionTaken: string; details?: Record<string, unknown> }>>();
+
+/**
+ * Idempotent request-driven auction timer processor.
+ * Resolves expired lots without requiring Vercel Cron.
+ * Checks whether the lot should be marked SOLD (with leading bid) or UNSOLD (zero bids),
+ * preserves 5-second announcement windows, and advances according to tournament rules.
+ */
+export async function checkAndProcessAuctionTimer(
+  leagueId: string
+): Promise<{ success: boolean; actionTaken: string; details?: Record<string, unknown> }> {
+  try {
+    const stateRow = await getAuctionStateFromSheets(leagueId);
+
+    // 1. Guard: Only in-progress auctions with an active player and expiry timestamp can expire
+    if (stateRow.status !== "IN_PROGRESS" || !stateRow.currentPlayerId || !stateRow.timerExpiresAt) {
+      return { success: true, actionTaken: `NO_OP_${stateRow.status}` };
+    }
+
+    const now = Date.now();
+    const expiryTimeMs = new Date(stateRow.timerExpiresAt).getTime();
+
+    // 2. Guard: Timer has not expired yet
+    if (now < expiryTimeMs) {
+      return {
+        success: true,
+        actionTaken: "TIMER_ACTIVE",
+        details: { remainingSeconds: Math.ceil((expiryTimeMs - now) / 1000) },
+      };
+    }
+
+    // 3. Guard: 5-second announcement window protection
+    // If an announcement is currently active, freeze the timer and do not process expiry
+    if (stateRow.announcementJson) {
+      try {
+        const ann = JSON.parse(stateRow.announcementJson);
+        if (ann && ann.endsAt && now < new Date(ann.endsAt).getTime()) {
+          return {
+            success: true,
+            actionTaken: "ANNOUNCEMENT_ACTIVE",
+            details: { announcementRemainingMs: new Date(ann.endsAt).getTime() - now },
+          };
+        }
+      } catch {}
+    }
+
+    // 4. Coalesce concurrent timer resolutions for (leagueId, currentPlayerId, version)
+    const resolutionKey = `${leagueId}:${stateRow.currentPlayerId}:v${stateRow.version}`;
+    if (inFlightTimerResolutions.has(resolutionKey)) {
+      return inFlightTimerResolutions.get(resolutionKey)!;
+    }
+
+    const resolutionPromise = (async () => {
+      try {
+        // Re-verify latest state inside resolution to protect against race conditions
+        const latestState = await getAuctionStateFromSheets(leagueId, true);
+        if (
+          latestState.status !== "IN_PROGRESS" ||
+          latestState.currentPlayerId !== stateRow.currentPlayerId ||
+          latestState.version !== stateRow.version
+        ) {
+          return { success: true, actionTaken: "ALREADY_RESOLVED" };
+        }
+
+        const hasWinningBid =
+          (latestState.currentHighestBid || 0) > 0 && Boolean(latestState.currentLeadingTeamId);
+
+        if (hasWinningBid) {
+          const actionRes = await processAuctionAction({
+            leagueId,
+            type: "HAMMER_SOLD",
+            playerId: latestState.currentPlayerId ?? undefined,
+            reason: "Request-Driven Timer: Authoritative timer expired with active bid",
+            actionId: `timer-sold-${leagueId}-${latestState.currentPlayerId}-v${latestState.version}`,
+            clientVersion: latestState.version,
+          });
+
+          return {
+            success: actionRes.success,
+            actionTaken: "HAMMER_SOLD",
+            details: {
+              playerId: latestState.currentPlayerId,
+              winningTeamId: latestState.currentLeadingTeamId,
+              soldPrice: latestState.currentHighestBid,
+              message: actionRes.message,
+            },
+          };
+        } else {
+          const actionRes = await processAuctionAction({
+            leagueId,
+            type: "HAMMER_UNSOLD",
+            playerId: latestState.currentPlayerId ?? undefined,
+            reason: "Request-Driven Timer: Authoritative timer expired with zero bids",
+            actionId: `timer-unsold-${leagueId}-${latestState.currentPlayerId}-v${latestState.version}`,
+            clientVersion: latestState.version,
+          });
+
+          return {
+            success: actionRes.success,
+            actionTaken: "HAMMER_UNSOLD",
+            details: {
+              playerId: latestState.currentPlayerId,
+              message: actionRes.message,
+            },
+          };
+        }
+      } finally {
+        inFlightTimerResolutions.delete(resolutionKey);
+      }
+    })();
+
+    inFlightTimerResolutions.set(resolutionKey, resolutionPromise);
+    return resolutionPromise;
+  } catch (err) {
+    console.error(`[AuctionStore] Error checking auction timer for ${leagueId}:`, err);
+    return { success: false, actionTaken: "ERROR", details: { error: (err as Error).message } };
+  }
+}
+
 /**
  * Retrieves authoritative state for a league from Google Sheets
- * Automatically checks and resolves expired lots with 0 bids to UNSOLD on the server
+ * Automatically checks and executes request-driven timer transitions on the server
  */
 export async function getAuthoritativeLeagueState(leagueId: string): Promise<LeagueState | null> {
   if (!leagueId || typeof leagueId !== "string") {
@@ -233,38 +353,17 @@ export async function getAuthoritativeLeagueState(leagueId: string): Promise<Lea
     return null;
   }
 
+  // Request-driven timer processing: evaluate expiration before reading snapshot
+  await checkAndProcessAuctionTimer(leagueId).catch((err) => {
+    console.error(`[AuctionStore] Request-driven timer evaluation warning for ${leagueId}:`, err);
+  });
+
   const [stateRow, teams, players, recentBids] = await Promise.all([
     getAuctionStateFromSheets(leagueId),
     getTeamsFromSheets(leagueId),
     getPlayersFromSheets(leagueId),
     getRecentBidsFromSheets(leagueId, 20),
   ]);
-
-  // Server-side wall-clock timer check: auto-resolve expired lot to UNSOLD
-  const now = Date.now();
-  const expiryTime = stateRow.timerExpiresAt ? new Date(stateRow.timerExpiresAt).getTime() : 0;
-
-  if (
-    stateRow.status === "IN_PROGRESS" &&
-    expiryTime > 0 &&
-    now >= expiryTime &&
-    stateRow.currentHighestBid === 0 &&
-    stateRow.currentPlayerId
-  ) {
-    // Automatically trigger server-side UNSOLD resolution
-    try {
-      await processAuctionAction({
-        leagueId,
-        type: "HAMMER_UNSOLD",
-        playerId: stateRow.currentPlayerId,
-        reason: "Timer expired with zero bids (Server-side auto hammer)",
-      });
-      // Re-fetch after auto-resolution
-      return getAuthoritativeLeagueState(leagueId);
-    } catch (err) {
-      console.error("[AuctionStore] Error during auto UNSOLD resolution:", err);
-    }
-  }
 
   const session = buildAuctionSession(stateRow, players, teams, recentBids, config.rules);
 

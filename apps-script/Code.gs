@@ -822,9 +822,9 @@ function handleUndoAction(ss, data) {
 }
 
 // ------------------------------------------------------------------------------
-// 11. SAVE_AUCTION_STATE
+// 11. SAVE_AUCTION_STATE — ATOMIC BATCH PERSISTENCE FOR STATE, TEAMS, PLAYERS, BIDS & PURCHASES
 // ------------------------------------------------------------------------------
-function handleSaveAuctionState(ss, stateData) {
+function handleSaveAuctionState(ss, payload) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
@@ -832,6 +832,8 @@ function handleSaveAuctionState(ss, stateData) {
     if (!stateSheet) {
       return jsonResponse({ success: false, error: "State sheet missing" }, 500);
     }
+
+    const stateData = (payload && payload.state) ? payload.state : (payload || {});
 
     const row = [
       stateData.id || "auction-main",
@@ -861,6 +863,107 @@ function handleSaveAuctionState(ss, stateData) {
       stateSheet.getRange(2, 1, 1, 21).setValues([row]);
     } else {
       stateSheet.getRange(2, 1, 1, 21).setValues([row]);
+    }
+
+    // Persist updated teams if included
+    if (payload && Array.isArray(payload.teams) && payload.teams.length > 0) {
+      const teamsSheet = ensureSheet(ss, TABS.TEAMS, [
+        "id", "seasonId", "name", "shortCode", "logoUrl", "primaryColor", "secondaryColor",
+        "ownerName", "ownerPhotoUrl", "iconPlayerName", "iconPlayerPhotoUrl",
+        "totalPurse", "remainingPurse", "spentPurse", "minPlayers", "maxPlayers", "reservedPurse",
+        "squadCount", "isCompleted", "updatedAt"
+      ]);
+      if (teamsSheet.getLastRow() >= 2) {
+        teamsSheet.getRange(2, 1, teamsSheet.getLastRow() - 1, 20).clearContent();
+      }
+      const teamRows = payload.teams.map(t => {
+        const totalPurse = t.purse?.totalBudget ?? t.purse?.totalPurse ?? 100000;
+        const remainingPurse = t.purse?.remainingAmount ?? totalPurse;
+        const spentPurse = t.purse?.spentAmount ?? 0;
+        const minPlayers = t.purse?.minPlayers ?? 8;
+        const maxPlayers = t.purse?.maxPlayers ?? 8;
+        const reservedPurse = t.purse?.reservedForSquad ?? t.purse?.reservedPurse ?? 0;
+        return [
+          t.id, t.seasonId || "league-main", t.name, t.shortCode || t.name.substring(0, 3).toUpperCase(),
+          t.logoUrl || "", t.primaryColor || "#059669", t.secondaryColor || "#F59E0B",
+          t.ownerName || "", t.ownerPhotoUrl || "", t.iconPlayerName || "", t.iconPlayerPhotoUrl || "",
+          totalPurse, remainingPurse, spentPurse, minPlayers, maxPlayers, reservedPurse,
+          t.squadCount || 0, t.isCompleted ? "TRUE" : "FALSE", new Date().toISOString()
+        ];
+      });
+      teamsSheet.getRange(2, 1, teamRows.length, 20).setValues(teamRows);
+    }
+
+    // Persist updated players if included
+    if (payload && Array.isArray(payload.players) && payload.players.length > 0) {
+      const playersSheet = ensureSheet(ss, TABS.PLAYERS, [
+        "id", "seasonId", "name", "category", "primaryRole", "battingStyle", "bowlingStyle",
+        "photoUrl", "basePrice", "status", "teamId", "soldPrice", "soldTime",
+        "isIcon", "sortOrder", "updatedAt"
+      ]);
+      if (playersSheet.getLastRow() >= 2) {
+        playersSheet.getRange(2, 1, playersSheet.getLastRow() - 1, 16).clearContent();
+      }
+      const playerRows = payload.players.map((p, idx) => [
+        p.id, p.seasonId || "league-main", p.fullName || p.name,
+        p.category || "SILVER", p.primaryRole || "ALL_ROUNDER",
+        p.battingStyle || "Right-Hand Bat", p.bowlingStyle || "Right-Arm Medium",
+        p.photoUrl || "", Number(p.basePrice) || 2000, p.status || "AVAILABLE",
+        p.soldToTeamId || p.teamId || "", p.soldPrice || "", p.soldTime || "",
+        p.isIcon ? "TRUE" : "FALSE", p.sortOrder || (idx + 1), new Date().toISOString()
+      ]);
+      playersSheet.getRange(2, 1, playerRows.length, 16).setValues(playerRows);
+    }
+
+    // Persist new bid if included
+    if (payload && payload.newBid) {
+      const bidsSheet = ensureSheet(ss, TABS.BID_HISTORY, [
+        "id", "seasonId", "playerId", "teamId", "amount", "bidTime", "round", "isWinning"
+      ]);
+      const b = payload.newBid;
+      bidsSheet.appendRow([
+        b.id || ("bid-" + Date.now()),
+        b.seasonId || "league-main",
+        b.playerId || "",
+        b.teamId || "",
+        b.amount || 0,
+        b.placedAt || b.bidTime || new Date().toISOString(),
+        b.round || stateData.round || 1,
+        b.isWinning ? "TRUE" : "FALSE"
+      ]);
+    }
+
+    // Persist new purchase record if included
+    if (payload && payload.newPurchase) {
+      const purchasesSheet = ensureSheet(ss, TABS.PURCHASES, [
+        "id", "seasonId", "teamId", "playerId", "amount", "round", "timestamp"
+      ]);
+      const p = payload.newPurchase;
+      purchasesSheet.appendRow([
+        p.id || ("pur-" + Date.now()),
+        p.seasonId || "league-main",
+        p.teamId || "",
+        p.playerId || "",
+        p.soldPrice || p.amount || 0,
+        p.round || stateData.round || 1,
+        p.soldAt || p.timestamp || new Date().toISOString()
+      ]);
+    }
+
+    // Persist audit entry if included
+    if (payload && payload.auditEntry) {
+      const auditSheet = ensureSheet(ss, TABS.AUDIT_LOG, [
+        "id", "seasonId", "action", "details", "actor", "timestamp"
+      ]);
+      const a = payload.auditEntry;
+      auditSheet.appendRow([
+        a.id || ("audit-" + Date.now()),
+        a.seasonId || "league-main",
+        a.actionType || a.action || "AUCTION_ACTION",
+        a.detailsJson || a.details || "{}",
+        a.actor || "AUCTIONEER",
+        a.timestamp || new Date().toISOString()
+      ]);
     }
 
     return jsonResponse({ success: true, version: row[14], updatedAt: row[15] });

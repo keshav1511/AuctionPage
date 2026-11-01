@@ -235,6 +235,12 @@ export function resolveSpreadsheetIdForLeague(leagueId: string): string | null {
   return null;
 }
 
+let lastAppsScriptSyncError: string | null = null;
+
+export function getLastPersistenceError(): string | null {
+  return lastAppsScriptSyncError;
+}
+
 /**
  * Synchronizes complete state from Google Apps Script Web App in a single network request
  */
@@ -250,6 +256,7 @@ async function syncFromAppsScript(leagueId: string): Promise<boolean> {
     }>("GET_ALL_DATA");
 
     if (data) {
+      lastAppsScriptSyncError = null;
       const mirror = getOrCreateMemoryMirror(leagueId);
       if (data.config && data.config.league) {
         mirror.league = { ...mirror.league, ...data.config.league };
@@ -278,6 +285,7 @@ async function syncFromAppsScript(leagueId: string): Promise<boolean> {
       return true;
     }
   } catch (err) {
+    lastAppsScriptSyncError = (err as Error).message || String(err);
     console.warn("[SheetsRepository] Apps Script sync warning:", err);
   }
   return false;
@@ -303,6 +311,15 @@ export async function getLeagueConfigFromSheets(
   }
 
   return coalesceRequest(`config:${leagueId}`, async () => {
+    if (isAppsScriptConfigured()) {
+      const ok = await syncFromAppsScript(leagueId);
+      if (!ok && lastAppsScriptSyncError) {
+        throw new Error(`[SheetsRepository] Persistence bridge error: ${lastAppsScriptSyncError}`);
+      }
+      const mirror = getOrCreateMemoryMirror(leagueId);
+      return { league: mirror.league, rules: mirror.rules };
+    }
+
     const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
     const sheets = getGoogleSheetsClient();
 
@@ -410,7 +427,10 @@ export async function getTeamsFromSheets(leagueId: string, skipCache = false): P
 
   return coalesceRequest(`teams:${leagueId}`, async () => {
     if (isAppsScriptConfigured()) {
-      await syncFromAppsScript(leagueId);
+      const ok = await syncFromAppsScript(leagueId);
+      if (!ok && lastAppsScriptSyncError) {
+        throw new Error(`[SheetsRepository] Persistence bridge error: ${lastAppsScriptSyncError}`);
+      }
       return getOrCreateMemoryMirror(leagueId).teams;
     }
 
@@ -521,7 +541,10 @@ export async function getPlayersFromSheets(leagueId: string, skipCache = false):
 
   return coalesceRequest(`players:${leagueId}`, async () => {
     if (isAppsScriptConfigured()) {
-      await syncFromAppsScript(leagueId);
+      const ok = await syncFromAppsScript(leagueId);
+      if (!ok && lastAppsScriptSyncError) {
+        throw new Error(`[SheetsRepository] Persistence bridge error: ${lastAppsScriptSyncError}`);
+      }
       return getOrCreateMemoryMirror(leagueId).players;
     }
 
@@ -635,7 +658,10 @@ export async function getAuctionStateFromSheets(
 
   return coalesceRequest(`state:${leagueId}`, async () => {
     if (isAppsScriptConfigured()) {
-      await syncFromAppsScript(leagueId);
+      const ok = await syncFromAppsScript(leagueId);
+      if (!ok && lastAppsScriptSyncError) {
+        throw new Error(`[SheetsRepository] Persistence bridge error: ${lastAppsScriptSyncError}`);
+      }
       return getOrCreateMemoryMirror(leagueId).state;
     }
 
@@ -738,6 +764,12 @@ export async function getRecentBidsFromSheets(
   }
 
   return coalesceRequest(`bids:${leagueId}`, async () => {
+    if (isAppsScriptConfigured()) {
+      await syncFromAppsScript(leagueId);
+      const mirror = getOrCreateMemoryMirror(leagueId);
+      return mirror.bids.slice(0, limit);
+    }
+
     const spreadsheetId = resolveSpreadsheetIdForLeague(leagueId);
     const sheets = getGoogleSheetsClient();
 
@@ -1132,7 +1164,16 @@ export async function executeSerializedAuctionAction(
       updatedState.lockExpiresAt = null;
       updatedState.updatedAt = new Date().toISOString();
 
-      if (isGoogleSheetsConfigured() && sheets && spreadsheetId) {
+      if (isAppsScriptConfigured()) {
+        await callAppsScript("SAVE_AUCTION_STATE", {
+          state: updatedState,
+          teams: result.updatedTeams,
+          players: result.updatedPlayers,
+          newBid: result.newBid,
+          newPurchase: result.newPurchase,
+          auditEntry: result.auditEntry,
+        });
+      } else if (isGoogleSheetsConfigured() && sheets && spreadsheetId) {
         const batchData: Array<{ range: string; values: string[][] }> = [];
 
         // Updated auction state row (A2:P2)

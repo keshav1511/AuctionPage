@@ -30,6 +30,7 @@ export interface RealtimeAuctionState {
   initRound2: () => Promise<{ success: boolean; error?: string }>;
   startRound2: () => Promise<{ success: boolean; error?: string }>;
   syncLeagueData: (teams?: Team[], players?: Player[]) => Promise<void>;
+  refreshState: () => Promise<void>;
 }
 
 export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
@@ -53,13 +54,19 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
       const res = await fetch(`/api/auction/state?leagueId=${encodeURIComponent(leagueId)}`);
       if (res.ok) {
         const data = await res.json();
-        if (data.session) setSession(data.session);
-        if (data.teams) setTeams(data.teams);
-        if (data.players) setPlayers(data.players);
-        if (data.rules) setRules(data.rules);
+        if (data.success) {
+          if (data.session) setSession(data.session);
+          if (data.teams) setTeams(data.teams);
+          if (data.players) setPlayers(data.players);
+          if (data.rules) setRules(data.rules);
+          setIsConnected(true);
+        }
+      } else {
+        setIsConnected(false);
       }
     } catch (err) {
       console.warn("[RealtimeAuction] Failed to fetch state from server:", err);
+      setIsConnected(false);
     }
   }, [leagueId]);
 
@@ -72,56 +79,60 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
     let isSubscribed = true;
 
     const connectSSE = () => {
-      const streamUrl = `/api/realtime/stream?leagueId=${encodeURIComponent(leagueId)}`;
-      const es = new EventSource(streamUrl);
-      eventSourceRef.current = es;
+      try {
+        const streamUrl = `/api/realtime/stream?leagueId=${encodeURIComponent(leagueId)}`;
+        const es = new EventSource(streamUrl);
+        eventSourceRef.current = es;
 
-      es.onopen = () => {
-        if (isSubscribed) {
-          setIsConnected(true);
-        }
-      };
-
-      es.onmessage = (event) => {
-        if (!isSubscribed) return;
-        try {
-          const data = JSON.parse(event.data);
-          if (data.session) setSession(data.session);
-          if (data.teams) setTeams(data.teams);
-          if (data.players) setPlayers(data.players);
-          if (data.rules) setRules(data.rules);
-
-          if (data.type === "LOT_SOLD") {
-            setIsHammered(true);
-          } else if (data.type === "LOT_CHANGED" || data.type === "BID_PLACED") {
-            setIsHammered(false);
+        es.onopen = () => {
+          if (isSubscribed) {
+            setIsConnected(true);
           }
+        };
 
-          if (data.lastAction?.message) {
-            setLastActionMessage(data.lastAction.message);
-            setTimeout(() => setLastActionMessage(null), 3500);
+        es.onmessage = (event) => {
+          if (!isSubscribed) return;
+          try {
+            const data = JSON.parse(event.data);
+            if (data.session) setSession(data.session);
+            if (data.teams) setTeams(data.teams);
+            if (data.players) setPlayers(data.players);
+            if (data.rules) setRules(data.rules);
+            setIsConnected(true);
+
+            if (data.type === "LOT_SOLD") {
+              setIsHammered(true);
+            } else if (data.type === "LOT_CHANGED" || data.type === "BID_PLACED") {
+              setIsHammered(false);
+            }
+
+            if (data.lastAction?.message) {
+              setLastActionMessage(data.lastAction.message);
+              setTimeout(() => setLastActionMessage(null), 3500);
+            }
+          } catch (err) {
+            console.error("[RealtimeAuction] Error parsing realtime event:", err);
           }
-        } catch (err) {
-          console.error("[RealtimeAuction] Error parsing realtime event:", err);
-        }
-      };
+        };
 
-      es.onerror = () => {
-        if (isSubscribed) {
-          setIsConnected(false);
-        }
-      };
+        es.onerror = () => {
+          // In serverless, SSE streams auto-timeout after 15-25s.
+          // Polling ensures uninterrupted live connectivity across serverless cold starts.
+        };
+      } catch (e) {
+        console.warn("[RealtimeAuction] EventSource initialization failed, relying on polling fallback:", e);
+      }
     };
 
     connectSSE();
 
-    // 3. Failsafe background polling (every 3.5s) ensuring synchronization
-    // even across multi-instance serverless deployments or temporary socket drops
+    // 3. Failsafe background polling (every 2.5s) ensuring synchronization
+    // across separate Vercel instances, serverless cold starts, and network reconnects
     const pollingFallback = setInterval(() => {
       if (isSubscribed) {
         fetchAuthoritativeState();
       }
-    }, 3500);
+    }, 2500);
 
     return () => {
       isSubscribed = false;
@@ -249,5 +260,6 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
     initRound2,
     startRound2,
     syncLeagueData,
+    refreshState: fetchAuthoritativeState,
   };
 }

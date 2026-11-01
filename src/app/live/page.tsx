@@ -697,6 +697,12 @@ export default function LiveAuctionStage() {
 
       <div className="relative z-10 flex flex-col min-h-screen">
         <BroadcastHeader />
+        {!isConnected && (
+          <div className="bg-amber-500/15 border-b border-amber-500/30 text-amber-300 text-xs py-1.5 px-4 text-center font-medium flex items-center justify-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+            <span>Connection Interrupted — Reconnecting to live auction... Displaying last verified state.</span>
+          </div>
+        )}
 
       {/* Main Broadcast Stage Canvas */}
       <main className="flex-1 p-4 lg:p-8 flex flex-col justify-between max-w-[1920px] mx-auto w-full">
