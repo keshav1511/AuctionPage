@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { reconcileLeaguePurchasesAndPurses } from "@/lib/sheets/google-sheets-repository";
+import { reconcileLeaguePurchasesAndPurses } from "@/lib/database/postgres-repository";
 import { authenticateAdminActionRequest } from "@/lib/auth/admin-auth";
 
 export const dynamic = "force-dynamic";

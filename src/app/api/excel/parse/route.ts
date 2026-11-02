@@ -1,5 +1,24 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
-import * as XLSX from "xlsx";
+import readXlsxFile, { readSheet } from "read-excel-file/node";
+
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === '"') {
+      if (quoted && text[index + 1] === '"') { field += '"'; index += 1; } else quoted = !quoted;
+    } else if (character === "," && !quoted) { row.push(field); field = ""; }
+    else if ((character === "\n" || character === "\r") && !quoted) {
+      if (character === "\r" && text[index + 1] === "\n") index += 1;
+      row.push(field); rows.push(row); row = []; field = "";
+    } else field += character;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -9,7 +28,7 @@ export async function POST(req: NextRequest) {
 
     if (!file) {
       return NextResponse.json(
-        { success: false, error: "Please attach an Excel file (.xlsx, .xls) or CSV." },
+        { success: false, error: "Please attach an Excel (.xlsx) or CSV file." },
         { status: 400 }
       );
     }
@@ -17,8 +36,11 @@ export async function POST(req: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    const workbook = XLSX.read(buffer, { type: "buffer" });
-    const sheetsList = workbook.SheetNames;
+    const isCsv = file.name.toLowerCase().endsWith(".csv");
+    if (!isCsv && !file.name.toLowerCase().endsWith(".xlsx")) {
+      return NextResponse.json({ success: false, error: "Only .xlsx and .csv uploads are supported." }, { status: 400 });
+    }
+    const sheetsList = isCsv ? ["CSV"] : (await readXlsxFile(buffer)).map((sheet) => sheet.sheet);
 
     if (!sheetsList || sheetsList.length === 0) {
       return NextResponse.json(
@@ -28,8 +50,9 @@ export async function POST(req: NextRequest) {
     }
 
     const selectedSheetName = targetSheet && sheetsList.includes(targetSheet) ? targetSheet : sheetsList[0];
-    const sheet = workbook.Sheets[selectedSheetName];
-    const rawData = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 });
+    const rawData = isCsv
+      ? parseCsv(new TextDecoder().decode(buffer))
+      : await readSheet(buffer, selectedSheetName);
 
     if (!rawData || rawData.length === 0) {
       return NextResponse.json(

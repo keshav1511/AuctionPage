@@ -33,6 +33,7 @@ export interface LeagueContextType {
     primaryColor?: string;
     secondaryColor?: string;
   }) => Promise<TournamentSummary>;
+  deleteTournament: (leagueId: string) => Promise<void>;
   updateLeague: (leagueId: string, updates: Partial<League>) => void;
   updateLeaguePalette: (leagueId: string, palette: BrandingPalette) => void;
   addTeam: (team: Team) => void;
@@ -313,6 +314,18 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
     return newLeague;
   };
 
+  const deleteTournament = async (leagueId: string) => {
+    const res = await fetch(`/api/tournaments/${encodeURIComponent(leagueId)}`, { method: "DELETE" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) throw new Error(data.error || "Could not delete tournament.");
+    setTournaments((current) => current.filter((t) => t.id !== leagueId));
+    setLeagues((current) => current.filter((league) => league.id !== leagueId));
+    if (activeLeagueId === leagueId) {
+      const remaining = leagues.find((league) => league.id !== leagueId);
+      if (remaining) await switchLeague(remaining.id);
+    }
+  };
+
   const updateLeague = (leagueId: string, updates: Partial<League>) => {
     const updated = leagues.map((l) => {
       if (l.id === leagueId) {
@@ -409,6 +422,7 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
         switchLeague,
         createLeague,
         createNewTournament,
+        deleteTournament,
         updateLeague,
         updateLeaguePalette,
         addTeam,

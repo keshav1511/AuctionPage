@@ -1,7 +1,8 @@
+import { readAuctionSnapshot } from "@/lib/database/postgres-repository";
 // ==============================================================================
-// NTL AUCTION PLATFORM - AUTHORITATIVE SERVER AUCTION STORE (GOOGLE SHEETS BACKED)
+// NTL AUCTION PLATFORM - AUTHORITATIVE SERVER AUCTION STORE (POSTGRESQL BACKED)
 // Server-side authoritative state management with real-time event broadcasting
-// Uses Google Sheets as the single source of truth for persistent data
+// Uses PostgreSQL as the single source of truth for persistent data
 // ==============================================================================
 
 import {
@@ -26,7 +27,7 @@ import {
   getRecentBidsFromSheets,
   markLastBidUndoneInSheets,
   executeSerializedAuctionAction,
-} from "@/lib/sheets/google-sheets-repository";
+} from "@/lib/database/postgres-repository";
 import { AuctionStateRow, PurchaseRecord, AuditLogEntry } from "@/lib/sheets/tab-definitions";
 import {
   validateBidEligibility,
@@ -96,147 +97,7 @@ export interface LeagueState {
   players: Player[];
   rules: AuctionRules;
   pausedRemainingSeconds?: number;
-}
-
-type EventListener = (event: AuctionRealtimeEvent) => void;
-
-interface StoreGlobalState {
-  listeners: Map<string, Set<EventListener>>;
-}
-
-// Global process singleton to persist SSE listeners across re-evaluations
-const globalState: StoreGlobalState = ((globalThis as unknown as Record<string, unknown>).__ntl_auction_listeners__ as StoreGlobalState) || {
-  listeners: new Map<string, Set<EventListener>>(),
-};
-
-if (process.env.NODE_ENV !== "production") {
-  (globalThis as unknown as Record<string, unknown>).__ntl_auction_listeners__ = globalState;
-}
-
-/**
- * Subscribes a listener to real-time events for a specific league
- */
-export function subscribeToAuctionEvents(leagueId: string, listener: EventListener): () => void {
-  if (!globalState.listeners.has(leagueId)) {
-    globalState.listeners.set(leagueId, new Set());
-  }
-
-  const set = globalState.listeners.get(leagueId)!;
-  set.add(listener);
-
-  return () => {
-    set.delete(listener);
-    if (set.size === 0) {
-      globalState.listeners.delete(leagueId);
-    }
-  };
-}
-
-/**
- * Broadcasts an authoritative event to all subscribers
- */
-export function broadcastEvent(event: AuctionRealtimeEvent) {
-  const set = globalState.listeners.get(event.leagueId);
-  if (set && set.size > 0) {
-    set.forEach((listener) => {
-      try {
-        listener(event);
-      } catch (err) {
-        console.error("Error executing auction event listener:", err);
-      }
-    });
-  }
-}
-
-/**
- * Maps raw sheets AuctionStateRow + entities into client-facing AuctionSession
- */
-function buildAuctionSession(
-  state: AuctionStateRow,
-  players: Player[],
-  teams: Team[],
-  recentBids: Bid[],
-  rules: AuctionRules
-): AuctionSession {
-  const currentPlayer = state.currentPlayerId
-    ? players.find(
-        (p) =>
-          p.id === state.currentPlayerId ||
-          p.registrationNo === state.currentPlayerId ||
-          (p.fullName && p.fullName === state.currentPlayerId)
-      ) || null
-    : null;
-
-  const currentLeadingTeam = state.currentLeadingTeamId
-    ? teams.find(
-        (t) =>
-          t.id === state.currentLeadingTeamId ||
-          t.shortCode === state.currentLeadingTeamId
-      ) || null
-    : null;
-
-  let round2Queue: Round2QueueItem[] | undefined;
-  try {
-    if (state.round2QueueJson) {
-      const parsed = JSON.parse(state.round2QueueJson);
-      if (Array.isArray(parsed)) {
-        round2Queue = parsed.map((item) =>
-          typeof item === "string" ? { id: item, status: "PENDING" as const } : item
-        );
-      }
-    }
-  } catch {}
-
-  let announcement: AuctionAnnouncement | null = null;
-  try {
-    if (state.announcementJson) {
-      const parsed = JSON.parse(state.announcementJson);
-      if (parsed && parsed.type && parsed.type !== "NONE") {
-        const nowMs = Date.now();
-        const endsAtMs = parsed.endsAt ? new Date(parsed.endsAt).getTime() : 0;
-        if (nowMs < endsAtMs) {
-          const annPlayer = parsed.playerId
-            ? players.find((p) => p.id === parsed.playerId) || null
-            : null;
-          const annTeam = parsed.winningTeamId
-            ? teams.find((t) => t.id === parsed.winningTeamId) || null
-            : null;
-          announcement = {
-            ...parsed,
-            player: annPlayer,
-            winningTeam: annTeam,
-          };
-        }
-      }
-    }
-  } catch {}
-
-  const stateVersion = Number(state.version) || 1;
-
-  return {
-    id: state.id,
-    seasonId: state.seasonId,
-    currentPlayerId: state.currentPlayerId,
-    currentPlayer,
-    currentHighestBid: state.currentHighestBid || 0,
-    currentLeadingTeamId: state.currentLeadingTeamId,
-    currentLeadingTeam,
-    status: state.status,
-    timerSeconds: state.timerSeconds || rules.initialTimerSeconds || 45,
-    timerExpiresAt: state.timerExpiresAt,
-    bidExtensionSeconds: state.bidExtensionSeconds || rules.bidExtensionSeconds || 10,
-    round: state.round || 1,
-    roundStage: state.roundStage || (state.round === 2 ? "ROUND_2" : "MAIN"),
-    round2Queue,
-    round2InitializedAt: state.round2InitializedAt,
-    round1Completed: state.round1Completed,
-    announcement,
-    bidCount: state.bidCount || 0,
-    recentBids,
-    version: stateVersion,
-    revision: stateVersion,
-    updatedAt: state.updatedAt || new Date().toISOString(),
-  };
+  revision: number;
 }
 
 // Coalesce in-flight timer resolution to guarantee an expired lot is processed exactly once
@@ -378,23 +239,7 @@ export async function getAuthoritativeLeagueState(leagueId: string): Promise<Lea
     console.error(`[AuctionStore] Request-driven timer evaluation warning for ${leagueId}:`, err);
   });
 
-  const [stateRow, teams, players, recentBids] = await Promise.all([
-    getAuctionStateFromSheets(leagueId),
-    getTeamsFromSheets(leagueId),
-    getPlayersFromSheets(leagueId),
-    getRecentBidsFromSheets(leagueId, 20),
-  ]);
-
-  const session = buildAuctionSession(stateRow, players, teams, recentBids, config.rules);
-
-  return {
-    league: config.league,
-    rules: config.rules,
-    teams,
-    players,
-    session,
-    pausedRemainingSeconds: stateRow.pausedRemainingSeconds,
-  };
+  return readAuctionSnapshot(leagueId);
 }
 
 /**
@@ -424,14 +269,6 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
     await saveLeagueConfigToSheets(updatedLeague, config.rules);
     const freshState = await getAuthoritativeLeagueState(leagueId);
     if (freshState) {
-      broadcastEvent({
-        type: "LEAGUE_UPDATED",
-        leagueId,
-        timestamp: nowIso,
-        revision: freshState.session.revision || freshState.session.version || 1,
-        session: freshState.session,
-        league: freshState.league,
-      });
       return { success: true, message: "League configuration updated", state: freshState };
     }
   }
@@ -448,14 +285,6 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
     await saveLeagueConfigToSheets(config.league, updatedRules);
     const freshState = await getAuthoritativeLeagueState(leagueId);
     if (freshState) {
-      broadcastEvent({
-        type: "RULES_UPDATED",
-        leagueId,
-        timestamp: nowIso,
-        revision: freshState.session.revision || freshState.session.version || 1,
-        session: freshState.session,
-        rules: freshState.rules,
-      });
       return { success: true, message: "Auction rules updated", state: freshState };
     }
   }
@@ -465,14 +294,6 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
     await saveTeamsToSheets(leagueId, payload.teams);
     const freshState = await getAuthoritativeLeagueState(leagueId);
     if (freshState) {
-      broadcastEvent({
-        type: "TEAMS_UPDATED",
-        leagueId,
-        timestamp: nowIso,
-        revision: freshState.session.revision || freshState.session.version || 1,
-        session: freshState.session,
-        teams: freshState.teams,
-      });
       return { success: true, message: "Teams updated", state: freshState };
     }
   }
@@ -499,14 +320,6 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
     await savePlayersToSheets(leagueId, payload.players);
     const freshState = await getAuthoritativeLeagueState(leagueId);
     if (freshState) {
-      broadcastEvent({
-        type: "PLAYERS_UPDATED",
-        leagueId,
-        timestamp: nowIso,
-        revision: freshState.session.revision || freshState.session.version || 1,
-        session: freshState.session,
-        players: freshState.players,
-      });
       return { success: true, message: "Players updated", state: freshState };
     }
   }
@@ -1319,30 +1132,8 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
   // Load fresh authoritative state and broadcast real-time SSE event
   const freshState = await getAuthoritativeLeagueState(leagueId);
   if (freshState) {
-    let eventType = "AUCTION_UPDATED";
-    if (type === "PLACE_BID") eventType = "BID_PLACED";
-    else if (type === "HAMMER_SOLD") eventType = "LOT_SOLD";
-    else if (type === "HAMMER_UNSOLD") eventType = "LOT_UNSOLD";
-    else if (type === "SELECT_LOT") eventType = "LOT_CHANGED";
-    else if (type === "PAUSE_RESUME") eventType = freshState.session.status === "PAUSED" ? "PAUSED" : "RESUMED";
-    else if (type === "UNDO") eventType = "BID_UNDONE";
-    else if (type === "RESET_LOT") eventType = "LOT_RESET";
 
-    broadcastEvent({
-      type: eventType,
-      leagueId,
-      timestamp: nowIso,
-      revision: freshState.session.revision || freshState.session.version || 1,
-      session: freshState.session,
-      teams: freshState.teams,
-      players: freshState.players,
-      rules: freshState.rules,
-      league: freshState.league,
-      lastAction: {
-        type,
-        message: txResult.message,
-      },
-    });
+
 
     return {
       success: true,

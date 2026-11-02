@@ -1,16 +1,6 @@
 import { NextResponse } from "next/server";
-import { isAppsScriptConfigured } from "@/lib/sheets/apps-script-client";
 
 export async function GET() {
-  return NextResponse.json({
-    status: "healthy",
-    app: "NTL Auction Platform",
-    edition: "Season 1",
-    timestamp: new Date().toISOString(),
-    services: {
-      dataStorage: "google_sheets_apps_script",
-      persistence: isAppsScriptConfigured() ? "connected" : "authoritative_local_mirror",
-    },
-  });
+  const configured = Boolean(process.env.DATABASE_URL && process.env.UPLOADTHING_TOKEN);
+  return NextResponse.json({ status: configured ? "healthy" : "misconfigured", app: "NTL Auction Platform", timestamp: new Date().toISOString(), services: { dataStorage: "postgresql", media: "uploadthing", configured } }, { status: configured ? 200 : 503 });
 }
-

@@ -3,7 +3,8 @@ import {
   getAllTournamentsFromSheets,
   getDesignatedActiveTournamentId,
   setDesignatedActiveTournamentId,
-} from "@/lib/sheets/google-sheets-repository";
+} from "@/lib/database/postgres-repository";
+import { authenticateAdminActionRequest } from "@/lib/auth/admin-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -120,6 +121,8 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    const auth = authenticateAdminActionRequest(req, tournamentId.trim());
+    if (!auth.authorized) return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
 
     setDesignatedActiveTournamentId(tournamentId.trim());
 

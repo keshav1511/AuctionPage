@@ -1,109 +1,63 @@
+import { createHash } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { getAdminSessionFromRequest } from "@/lib/auth/admin-auth";
-import { callAppsScript, isAppsScriptConfigured } from "@/lib/sheets/apps-script-client";
+import { Pool } from "pg";
+import { UTApi } from "uploadthing/server";
+import { authenticateAdminActionRequest } from "@/lib/auth/admin-auth";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 export const maxDuration = 30;
+
+const permittedFolders = new Set(["players", "teams", "league"]);
+
+function mediaPool(): Pool | null {
+  if (!process.env.DATABASE_URL) return null;
+  return new Pool({ connectionString: process.env.DATABASE_URL, max: 1, ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : undefined });
+}
 
 export async function POST(req: NextRequest) {
   try {
     // 1. Authenticate Admin
-    const session = getAdminSessionFromRequest(req);
-    if (!session) {
+    const auth = authenticateAdminActionRequest(req);
+    if (!auth.authorized) {
       return NextResponse.json(
-        { success: false, error: "Unauthorized: Admin session required to upload media." },
+        { success: false, error: auth.error || "Unauthorized: Admin session required to upload media." },
         { status: 401 }
       );
     }
 
-    let base64Data = "";
-    let fileName = "";
-    let mimeType = "image/jpeg";
-    let folderId = "";
-    let subfolder = "players";
+    if (!process.env.UPLOADTHING_TOKEN) return NextResponse.json({ success: false, error: "UPLOADTHING_TOKEN is not configured." }, { status: 503 });
+    const formData = await req.formData();
+    const uploaded = formData.get("file");
+    const category = String(formData.get("folder") || "players");
+    const leagueId = String(formData.get("leagueId") || "").trim() || null;
+    const entityType = String(formData.get("entityType") || "").trim() || null;
+    const entityId = String(formData.get("entityId") || "").trim() || null;
+    if (!(uploaded instanceof File)) return NextResponse.json({ success: false, error: "No image file provided in form data." }, { status: 400 });
+    if (!permittedFolders.has(category) || !uploaded.type.startsWith("image/")) return NextResponse.json({ success: false, error: "Only supported image categories can be uploaded." }, { status: 400 });
 
-    const contentType = req.headers.get("content-type") || "";
-
-    if (contentType.includes("multipart/form-data")) {
-      const formData = await req.formData();
-      const file = formData.get("file") as File | null;
-      folderId = (formData.get("folderId") as string) || "";
-      const rawFolder = (formData.get("folder") as string) || "";
-      if (rawFolder === "players" || rawFolder === "teams" || rawFolder === "league") {
-        subfolder = rawFolder;
-      }
-
-      if (!file) {
-        return NextResponse.json(
-          { success: false, error: "No image file provided in form data." },
-          { status: 400 }
-        );
-      }
-
-      fileName = file.name;
-      mimeType = file.type || "image/jpeg";
-      const buffer = Buffer.from(await file.arrayBuffer());
-      base64Data = buffer.toString("base64");
-    } else {
-      const json = await req.json();
-      base64Data = json.base64Data || json.base64 || "";
-      fileName = json.fileName || json.name || "image.jpg";
-      mimeType = json.mimeType || "image/jpeg";
-      folderId = json.folderId || "";
-      if (json.folder === "players" || json.folder === "teams" || json.folder === "league") {
-        subfolder = json.folder;
-      }
-    }
-
-    if (!base64Data) {
-      return NextResponse.json(
-        { success: false, error: "Image data is empty." },
-        { status: 400 }
-      );
-    }
-
-    // 2. Upload to Google Drive via Apps Script Bridge
-    if (!isAppsScriptConfigured()) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Apps Script persistence bridge is not configured. Configure APPS_SCRIPT_WEB_APP_URL and APPS_SCRIPT_SHARED_SECRET."
-        },
-        { status: 503 }
-      );
-    }
-
-    const result = await callAppsScript<{
-      success: boolean;
-      fileId: string;
-      url: string;
-      fileName: string;
-      error?: string;
-    }>("UPLOAD_IMAGE", {
-      base64Data,
-      fileName,
-      mimeType,
-      folderId: folderId || undefined,
-      subfolder,
-    });
-
-    if (!result || !result.fileId || !result.url) {
-      return NextResponse.json(
-        { success: false, error: result?.error || "Drive upload returned an invalid response." },
-        { status: 500 }
-      );
-    }
+    const bytes = Buffer.from(await uploaded.arrayBuffer());
+    const contentHash = createHash("sha256").update(bytes).digest("hex");
+    const file = new File([bytes], uploaded.name, { type: uploaded.type, lastModified: uploaded.lastModified });
+    const result = await new UTApi({ token: process.env.UPLOADTHING_TOKEN }).uploadFiles(file);
+    if (result.error || !result.data) throw new Error(result.error?.message || "UploadThing rejected the upload.");
+    const output = result.data;
+    const p = mediaPool();
+    if (p) try {
+      await p.query(`INSERT INTO media_assets (league_id, category, file_key, url, file_name, mime_type, content_hash, entity_type, entity_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [leagueId, category, output.key, output.ufsUrl || output.url, uploaded.name, uploaded.type, contentHash, entityType, entityId]);
+    } finally { await p.end(); }
 
     return NextResponse.json({
       success: true,
-      fileId: result.fileId,
-      url: result.url,
-      fileName: result.fileName || fileName,
+      fileId: output.key,
+      fileKey: output.key,
+      url: output.ufsUrl || output.url,
+      fileName: uploaded.name,
     });
   } catch (error: unknown) {
     console.error("[MediaUpload] Error handling upload:", error);
     return NextResponse.json(
-      { success: false, error: (error as Error).message || "Failed to upload image to Google Drive." },
+      { success: false, error: (error as Error).message || "Failed to upload image to UploadThing." },
       { status: 500 }
     );
   }

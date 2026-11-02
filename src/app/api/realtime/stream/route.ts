@@ -1,128 +1,113 @@
-import { NextRequest } from "next/server";
-import { getAuthoritativeLeagueState, subscribeToAuctionEvents, AuctionRealtimeEvent } from "@/lib/server/auction-store";
+import { Client } from "@neondatabase/serverless";
+import { SNAPSHOT_SQL, mapSnapshot, publicSnapshot, type SnapshotRow } from "@/lib/realtime/snapshot";
 
+export const runtime = "edge";
 export const dynamic = "force-dynamic";
-export const maxDuration = 25;
 
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const leagueId = searchParams.get("leagueId") || "league-main";
-
-  const state = await getAuthoritativeLeagueState(leagueId);
-  if (!state) {
-    return new Response(JSON.stringify({ error: `League with ID "${leagueId}" not found` }), {
-      status: 404,
-      headers: { "Content-Type": "application/json" },
-    });
+export async function GET(req: Request) {
+  const leagueId = new URL(req.url).searchParams.get("leagueId") || "league-main";
+  const connectionString = process.env.DATABASE_DIRECT_URL;
+  if (!connectionString || new URL(connectionString).hostname.includes("-pooler")) {
+    return Response.json({ error: "Realtime requires a direct Neon connection configured server-side" }, { status: 503 });
   }
+  if (!leagueId || leagueId.length > 200) return Response.json({ error: "Invalid leagueId" }, { status: 400 });
 
+  const client = new Client({ connectionString, connectionTimeoutMillis: 10000 });
   const encoder = new TextEncoder();
-
-  const stream = new ReadableStream({
-    start(controller) {
-      // 1. Send initial authoritative state sync immediately on connect
+  let closed = false;
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let lifetime: ReturnType<typeof setTimeout> | undefined;
+  let expiry: ReturnType<typeof setTimeout> | undefined;
+  let reading = false;
+  let dirty = false;
+  let lastRevision = -1;
+  let timerRequest: AbortController | undefined;
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    clearTimeout(lifetime);
+    clearTimeout(expiry);
+    timerRequest?.abort();
+    req.signal.removeEventListener("abort", cleanup);
+    void client.end().catch(() => {});
+    try { controller?.close(); } catch { /* Already cancelled. */ }
+  };
+  const send = (value: string) => {
+    if (closed) return;
+    // Disconnect slow readers rather than accumulate unlimited snapshots.
+    if (controller && (controller.desiredSize ?? 0) <= 0) { cleanup(); return; }
+    controller?.enqueue(encoder.encode(value));
+  };
+  const scheduleExpiry = (snapshot: ReturnType<typeof mapSnapshot>) => {
+    clearTimeout(expiry);
+    const session = snapshot.session;
+    if (session.status !== "IN_PROGRESS" || !session.currentPlayerId || !session.timerExpiresAt) return;
+    const deadline = Date.parse(session.timerExpiresAt);
+    if (!Number.isFinite(deadline)) return;
+    expiry = setTimeout(async () => {
+      if (closed) return;
+      // Reuse the Node authoritative timer processor only when a lot expires.
+      timerRequest = new AbortController();
       try {
-        const initialRev = state.session.revision || state.session.version || 1;
-        const initialEvent: AuctionRealtimeEvent = {
-          type: "INITIAL_SYNC",
-          leagueId,
-          timestamp: new Date().toISOString(),
-          revision: initialRev,
-          session: state.session,
-          teams: state.teams,
-          players: state.players,
-          rules: state.rules,
-          league: state.league,
-          lastAction: {
-            type: "UPDATE_LEAGUE",
-            message: "Connected to live auction stream",
-          },
-        };
-
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(initialEvent)}\n\n`));
-      } catch (err) {
-        console.error("Error sending initial sync event:", err);
+        const url = new URL("/api/auction/state", req.url);
+        url.searchParams.set("leagueId", leagueId);
+        await fetch(url, { cache: "no-store", signal: timerRequest.signal });
+      } catch { /* Recovery read on reconnect or next notification. */ }
+      finally { timerRequest = undefined; }
+    }, Math.max(100, deadline - Date.now() + 100));
+  };
+  const refresh = async () => {
+    dirty = true;
+    if (reading || closed || !controller) return;
+    reading = true;
+    try {
+      while (dirty && !closed) {
+        dirty = false;
+        const result = await client.query<SnapshotRow>(SNAPSHOT_SQL, [leagueId]);
+        if (closed) return;
+        if (!result.rows[0]) { cleanup(); return; }
+        const snapshot = publicSnapshot(mapSnapshot(result.rows[0]));
+        if (snapshot.revision > lastRevision) {
+          const initial = lastRevision < 0;
+          lastRevision = snapshot.revision;
+          send(`id: ${leagueId}:${snapshot.revision}\ndata: ${JSON.stringify({ ...snapshot, leagueId,
+            type: initial ? "INITIAL_SYNC" : "AUCTION_UPDATED", timestamp: new Date().toISOString() })}\n\n`);
+          scheduleExpiry(snapshot);
+        }
       }
-
-      // 2. Subscribe to real-time in-process events for this league
-      const unsubscribe = subscribeToAuctionEvents(leagueId, (event) => {
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-        } catch {
-          // Stream might be closed
-        }
-      });
-
-      // 3. Keep-alive heartbeat every 10s to prevent proxy timeouts
-      const heartbeat = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(`: heartbeat\n\n`));
-        } catch {
-          clearInterval(heartbeat);
-        }
-      }, 10000);
-
-      // 4. Serverless cross-instance sync check every 2.0s
-      let lastKnownRevision = state.session.revision || state.session.version || 1;
-      let lastKnownStateSummary = `${state.session.status}-${state.session.currentPlayerId}-${state.session.currentHighestBid}-${state.session.bidCount}`;
-      const crossInstanceSync = setInterval(async () => {
-        try {
-          const fresh = await getAuthoritativeLeagueState(leagueId);
-          if (fresh) {
-            const freshRev = fresh.session.revision || fresh.session.version || 1;
-            const summary = `${fresh.session.status}-${fresh.session.currentPlayerId}-${fresh.session.currentHighestBid}-${fresh.session.bidCount}`;
-            if (freshRev > lastKnownRevision || summary !== lastKnownStateSummary) {
-              lastKnownRevision = Math.max(lastKnownRevision, freshRev);
-              lastKnownStateSummary = summary;
-              const syncEvent: AuctionRealtimeEvent = {
-                type: "AUCTION_UPDATED",
-                leagueId,
-                timestamp: new Date().toISOString(),
-                revision: freshRev,
-                session: fresh.session,
-                teams: fresh.teams,
-                players: fresh.players,
-                rules: fresh.rules,
-                league: fresh.league,
-              };
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(syncEvent)}\n\n`));
-            }
-          }
-        } catch {}
-      }, 2000);
-
-      const cleanup = () => {
-        clearInterval(heartbeat);
-        clearInterval(crossInstanceSync);
-        unsubscribe();
-      };
-
-      // 5. Graceful close before Vercel serverless function execution limit
-      const lifetimeTimeout = setTimeout(() => {
-        cleanup();
-        try {
-          controller.close();
-        } catch {}
-      }, 20000);
-
-      // 6. Handle client disconnection
-      req.signal.addEventListener("abort", () => {
-        clearTimeout(lifetimeTimeout);
-        cleanup();
-        try {
-          controller.close();
-        } catch {}
-      });
-    },
+    } catch { cleanup(); }
+    finally { reading = false; }
+  };
+  client.on("notification", message => {
+    try { if (JSON.parse(message.payload || "{}").leagueId === leagueId) void refresh(); }
+    catch { /* Ignore malformed notifications. */ }
   });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform, no-store, must-revalidate, max-age=0",
-      Pragma: "no-cache",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
+  client.on("error", cleanup);
+  req.signal.addEventListener("abort", cleanup, { once: true });
+  try {
+    await client.connect();
+    if (closed || req.signal.aborted) { cleanup(); return new Response(null, { status: 499 }); }
+    // LISTEN completes before the first snapshot query: no subscribe/read gap.
+    await client.query("LISTEN auction_changes");
+  } catch {
+    cleanup();
+    return Response.json({ error: "Realtime database connection unavailable" }, { status: 503 });
+  }
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+      send(": connected\nretry: 1000\n\n");
+      void refresh();
+      heartbeat = setInterval(() => send(`event: heartbeat\ndata: ${Date.now()}\n\n`), 10000);
+      lifetime = setTimeout(cleanup, 240000);
     },
-  });
+    cancel: cleanup,
+  }, { highWaterMark: 8 });
+  return new Response(stream, { headers: {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-store, no-cache, no-transform",
+    "X-Accel-Buffering": "no",
+  } });
 }

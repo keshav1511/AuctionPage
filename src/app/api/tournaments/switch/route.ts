@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   getAuctionStateFromSheets,
   setDesignatedActiveTournamentId,
-} from "@/lib/sheets/google-sheets-repository";
+} from "@/lib/database/postgres-repository";
+import { authenticateAdminActionRequest } from "@/lib/auth/admin-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,8 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    const auth = authenticateAdminActionRequest(req, tournamentId);
+    if (!auth.authorized) return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
 
     // Check if the current tournament is active and currently IN_PROGRESS
     if (currentTournamentId && currentTournamentId !== tournamentId && !force) {

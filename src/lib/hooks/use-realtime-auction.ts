@@ -1,20 +1,14 @@
-// ==============================================================================
-// NTL AUCTION PLATFORM - REAL-TIME AUCTION HOOK (GOOGLE SHEETS BACKED)
-// Client-side hook managing real-time auction synchronization via SSE & polling
-// Completely decoupled from Supabase; authoritative source of truth is Google Sheets
-// Features: Monotonic revision ordering, anti-cache polling, and auto-reconnecting SSE
-// ==============================================================================
-
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { AuctionSession, Team, Player, AuctionRules } from "@/types";
+import { AuctionSession, Team, Player, AuctionRules, League } from "@/types";
 import { MOCK_AUCTION_SESSION, MOCK_RULES } from "@/lib/mock-data/auction";
 import { NTL_TEAMS, NTL_PLAYERS } from "@/config/ntl-season-1";
 
 export type RealtimeConnectionStatus = "connected" | "reconnecting" | "unavailable";
 
 export interface RealtimeAuctionState {
+  league: League | null;
   session: AuctionSession;
   teams: Team[];
   players: Player[];
@@ -45,6 +39,7 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
     revision: 1,
     version: 1,
   });
+  const [league, setLeague] = useState<League | null>(null);
   const [teams, setTeams] = useState<Team[]>(NTL_TEAMS);
   const [players, setPlayers] = useState<Player[]>(NTL_PLAYERS);
   const [rules, setRules] = useState<AuctionRules>(MOCK_RULES);
@@ -56,11 +51,16 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
   const [isHammered, setIsHammered] = useState<boolean>(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
-  const lastRevisionRef = useRef<number>(1);
+  const lastRevisionRef = useRef<number>(0);
+  const actionVersionRef = useRef<number>(0);
+  const messageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeLeagueRef = useRef(leagueId);
+  activeLeagueRef.current = leagueId;
 
   // Centralized authoritative state application with monotonic revision ordering
   const applyAuthoritativeState = useCallback(
     (incoming: {
+      league?: League;
       session?: AuctionSession;
       teams?: Team[];
       players?: Player[];
@@ -68,6 +68,7 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
       revision?: number;
       version?: number;
     }): boolean => {
+      if (activeLeagueRef.current !== leagueId || (incoming.session && incoming.session.seasonId !== leagueId)) return false;
       const incomingRev =
         incoming.revision ??
         incoming.session?.revision ??
@@ -89,163 +90,114 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
         setSession({
           ...incoming.session,
           revision: lastRevisionRef.current,
-          version: lastRevisionRef.current,
+          version: incoming.session.version,
         });
       }
+      if (incoming.session?.version) actionVersionRef.current = incoming.session.version;
+      if (incoming.league) setLeague(incoming.league);
+      if (incoming.session) setIsHammered(incoming.session.announcement?.type === "SOLD");
       if (incoming.teams) setTeams(incoming.teams);
       if (incoming.players) setPlayers(incoming.players);
       if (incoming.rules) setRules(incoming.rules);
 
-      setIsConnected(true);
-      setConnectionStatus("connected");
       return true;
     },
-    []
+    [leagueId]
   );
 
-  // 1. Fetch authoritative state with explicit anti-cache parameters
   const fetchAuthoritativeState = useCallback(async () => {
     try {
-      const rev = lastRevisionRef.current;
-      const res = await fetch(
-        `/api/auction/state?leagueId=${encodeURIComponent(leagueId)}&_t=${Date.now()}&_rev=${rev}`,
-        {
-          cache: "no-store",
-          headers: {
-            "Cache-Control": "no-cache",
-            Pragma: "no-cache",
-          },
-        }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          applyAuthoritativeState({
-            session: data.session,
-            teams: data.teams,
-            players: data.players,
-            rules: data.rules,
-            revision: data.revision || data.version,
-          });
-        }
-      } else {
-        if (lastRevisionRef.current === 0) {
-          setIsConnected(false);
-          setConnectionStatus("unavailable");
-        }
-      }
-    } catch (err) {
-      console.warn("[RealtimeAuction] Failed to fetch state from server:", err);
-      if (!isConnected) {
-        setConnectionStatus("reconnecting");
-      }
+      const res = await fetch(`/api/auction/state?leagueId=${encodeURIComponent(leagueId)}`, { cache: "no-store" });
+      if (!res.ok) throw new Error("State unavailable");
+      const data = await res.json();
+      if (data.success) applyAuthoritativeState(data);
+    } catch {
+      if (activeLeagueRef.current === leagueId && lastRevisionRef.current === 0) setConnectionStatus("unavailable");
     }
-  }, [leagueId, applyAuthoritativeState, isConnected]);
+  }, [leagueId, applyAuthoritativeState]);
 
   useEffect(() => {
-    fetchAuthoritativeState();
-  }, [fetchAuthoritativeState]);
+    let active = true;
+    let healthy = false;
+    let lastSeen = Date.now();
+    let attempts = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    lastRevisionRef.current = 0;
+    actionVersionRef.current = 0;
+    setCurrentRevision(0);
+    setLeague(null);
+    setSession({ ...MOCK_AUCTION_SESSION, seasonId: leagueId, currentPlayer: null, currentPlayerId: null, announcement: null });
+    setTeams([]);
+    setPlayers([]);
+    setIsHammered(false);
+    setLastActionMessage(null);
+    setIsConnected(false);
+    setConnectionStatus("reconnecting");
 
-  // 2. Real-time Subscription via SSE Stream with auto-reconnection and exponential backoff
-  useEffect(() => {
-    let isSubscribed = true;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let reconnectAttempts = 0;
-
-    const connectSSE = () => {
-      if (!isSubscribed) return;
-      try {
-        const rev = lastRevisionRef.current;
-        const streamUrl = `/api/realtime/stream?leagueId=${encodeURIComponent(leagueId)}&_t=${Date.now()}&_rev=${rev}`;
-        const es = new EventSource(streamUrl);
-        eventSourceRef.current = es;
-
-        es.onopen = () => {
-          if (!isSubscribed) return;
-          reconnectAttempts = 0;
+    const connect = () => {
+      if (!active) return;
+      const es = new EventSource(`/api/realtime/stream?leagueId=${encodeURIComponent(leagueId)}`);
+      eventSourceRef.current = es;
+      lastSeen = Date.now();
+      const fail = () => {
+        if (!active || eventSourceRef.current !== es) return;
+        es.close();
+        eventSourceRef.current = null;
+        healthy = false;
+        setIsConnected(false);
+        setConnectionStatus("reconnecting");
+        const delay = Math.min(10000, 1000 * 2 ** Math.min(attempts++, 4));
+        reconnectTimer = setTimeout(connect, delay + Math.random() * 250);
+      };
+      es.addEventListener("heartbeat", () => { lastSeen = Date.now(); });
+      es.onmessage = event => {
+        if (!active || eventSourceRef.current !== es) return;
+        try {
+          const data = JSON.parse(event.data);
+          if (data.leagueId !== leagueId || !data.session) return;
+          if (!applyAuthoritativeState(data)) return;
+          lastSeen = Date.now();
+          healthy = true;
+          attempts = 0;
           setIsConnected(true);
           setConnectionStatus("connected");
-        };
-
-        es.onmessage = (event) => {
-          if (!isSubscribed) return;
-          try {
-            const data = JSON.parse(event.data);
-            applyAuthoritativeState({
-              session: data.session,
-              teams: data.teams,
-              players: data.players,
-              rules: data.rules,
-              revision: data.revision,
-            });
-
-            if (data.type === "LOT_SOLD") {
-              setIsHammered(true);
-            } else if (
-              data.type === "LOT_CHANGED" ||
-              data.type === "BID_PLACED" ||
-              data.type === "LOT_RESET"
-            ) {
-              setIsHammered(false);
-            }
-
-            if (data.lastAction?.message) {
-              setLastActionMessage(data.lastAction.message);
-              setTimeout(() => setLastActionMessage(null), 3500);
-            }
-          } catch (err) {
-            console.error("[RealtimeAuction] Error parsing realtime event:", err);
-          }
-        };
-
-        es.onerror = () => {
-          if (!isSubscribed) return;
-          try {
-            es.close();
-          } catch {}
-          eventSourceRef.current = null;
-          setConnectionStatus("reconnecting");
-
-          // Auto-reconnect with exponential backoff (1s, 2s, max 4s)
-          reconnectAttempts++;
-          const delay = Math.min(4000, 1000 * Math.pow(1.5, Math.min(reconnectAttempts - 1, 3)));
-          if (reconnectTimer) clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(() => {
-            if (isSubscribed) connectSSE();
-          }, delay);
-        };
-      } catch (e) {
-        console.warn("[RealtimeAuction] EventSource error, fallback active:", e);
-        setConnectionStatus("reconnecting");
-      }
+        } catch { fail(); }
+      };
+      es.onerror = fail;
     };
-
-    connectSSE();
-
-    // 3. Failsafe background polling (every 2.0s) guaranteeing continuous synchronization
-    const pollingFallback = setInterval(() => {
-      if (isSubscribed) {
-        fetchAuthoritativeState();
-      }
-    }, 2000);
-
-    return () => {
-      isSubscribed = false;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      clearInterval(pollingFallback);
-      if (eventSourceRef.current) {
+    void fetchAuthoritativeState();
+    connect();
+    const recovery = setInterval(() => {
+      if (!active) return;
+      if (Date.now() - lastSeen > 30000 && eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
+        healthy = false;
+        setIsConnected(false);
+        setConnectionStatus("reconnecting");
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connect, 1000);
       }
+      if (!healthy) void fetchAuthoritativeState();
+    }, 5000);
+    const visible = () => {
+      if (document.visibilityState === "visible") void fetchAuthoritativeState();
+    };
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      active = false;
+      clearTimeout(reconnectTimer);
+      clearInterval(recovery);
+      document.removeEventListener("visibilitychange", visible);
+      eventSourceRef.current?.close();
+      eventSourceRef.current = null;
+      if (messageTimeoutRef.current) clearTimeout(messageTimeoutRef.current);
     };
   }, [leagueId, fetchAuthoritativeState, applyAuthoritativeState]);
 
   // 4. Authoritative countdown derived from session.timerExpiresAt
   useEffect(() => {
     if (session.status !== "IN_PROGRESS" || !session.timerExpiresAt) {
-      if (session.status === "PAUSED") {
-        return; // maintain frozen seconds
-      }
       setRemainingSeconds(session.timerSeconds || 0);
       return;
     }
@@ -278,7 +230,7 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
           (payload.actionId as string) ||
           `act-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
-        const clientVersion = lastRevisionRef.current;
+        const clientVersion = actionVersionRef.current;
 
         const res = await fetch("/api/auction/action", {
           method: "POST",
@@ -290,12 +242,19 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
           return { success: false, error: data.error || "Action rejected by server" };
         }
 
+        if (activeLeagueRef.current !== leagueId) return { success: true };
+        if (data.message) {
+          setLastActionMessage(data.message);
+          if (messageTimeoutRef.current) clearTimeout(messageTimeoutRef.current);
+          messageTimeoutRef.current = setTimeout(() => setLastActionMessage(null), 3500);
+        }
         applyAuthoritativeState({
+          league: data.league,
           session: data.session,
           teams: data.teams,
           players: data.players,
           rules: data.rules,
-          revision: data.session?.revision || (lastRevisionRef.current + 1),
+          revision: data.session?.revision,
         });
 
         return { success: true };
@@ -346,6 +305,7 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
   );
 
   return {
+    league,
     session,
     teams,
     players,

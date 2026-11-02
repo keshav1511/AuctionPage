@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTeamsFromSheets, getPlayersFromSheets } from "@/lib/sheets/google-sheets-repository";
+import { getTeamsFromSheets, getPlayersFromSheets } from "@/lib/database/postgres-repository";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);

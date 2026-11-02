@@ -1,3 +1,4 @@
+import { publicSnapshot } from "@/lib/realtime/snapshot";
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthoritativeLeagueState } from "@/lib/server/auction-store";
 
@@ -9,7 +10,8 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const leagueId = searchParams.get("leagueId") || "league-main";
 
-    const state = await getAuthoritativeLeagueState(leagueId);
+    const authoritative = await getAuthoritativeLeagueState(leagueId);
+    const state = authoritative ? publicSnapshot({ ...authoritative, revision: authoritative.session.revision || authoritative.session.version || 1 }) : null;
     if (!state) {
       return NextResponse.json(
         { success: false, error: `League with ID "${leagueId}" not found` },

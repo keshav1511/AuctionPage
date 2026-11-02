@@ -6,10 +6,11 @@ import {
   savePlayersToSheets,
   saveAuctionStateToSheets,
   invalidateLeagueCache,
-} from "@/lib/sheets/google-sheets-repository";
+} from "@/lib/database/postgres-repository";
 import { League, AuctionRules, TournamentSummary } from "@/types";
 import { AuctionStateRow } from "@/lib/sheets/tab-definitions";
 import { DEFAULT_AUCTION_RULES } from "@/config/default-config";
+import { authenticateAdminActionRequest } from "@/lib/auth/admin-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +38,8 @@ export async function GET() {
  */
 export async function POST(req: NextRequest) {
   try {
+    const auth = authenticateAdminActionRequest(req);
+    if (!auth.authorized) return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
     const body = await req.json();
     const {
       name,

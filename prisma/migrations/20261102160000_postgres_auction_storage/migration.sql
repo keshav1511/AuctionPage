@@ -1,0 +1,12 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE "auction_leagues" ("id" text PRIMARY KEY, "data" jsonb NOT NULL, "rules" jsonb NOT NULL, "updated_at" timestamptz NOT NULL DEFAULT now());
+CREATE TABLE "auction_teams" ("league_id" text NOT NULL REFERENCES "auction_leagues"("id") ON DELETE CASCADE, "id" text NOT NULL, "data" jsonb NOT NULL, PRIMARY KEY ("league_id","id"));
+CREATE TABLE "auction_players" ("league_id" text NOT NULL REFERENCES "auction_leagues"("id") ON DELETE CASCADE, "id" text NOT NULL, "data" jsonb NOT NULL, PRIMARY KEY ("league_id","id"));
+CREATE TABLE "auction_states" ("league_id" text PRIMARY KEY REFERENCES "auction_leagues"("id") ON DELETE CASCADE, "data" jsonb NOT NULL, "version" integer NOT NULL DEFAULT 1, "updated_at" timestamptz NOT NULL DEFAULT now());
+CREATE TABLE "auction_bids" ("league_id" text NOT NULL REFERENCES "auction_leagues"("id") ON DELETE CASCADE, "id" text NOT NULL, "data" jsonb NOT NULL, "undone" boolean NOT NULL DEFAULT false, "created_at" timestamptz NOT NULL DEFAULT now(), PRIMARY KEY ("league_id","id"));
+CREATE TABLE "auction_purchases" ("league_id" text NOT NULL REFERENCES "auction_leagues"("id") ON DELETE CASCADE, "id" text NOT NULL, "data" jsonb NOT NULL, "created_at" timestamptz NOT NULL DEFAULT now(), PRIMARY KEY ("league_id","id"));
+CREATE TABLE "auction_audit_logs" ("league_id" text NOT NULL REFERENCES "auction_leagues"("id") ON DELETE CASCADE, "id" text NOT NULL, "data" jsonb NOT NULL, "created_at" timestamptz NOT NULL DEFAULT now(), PRIMARY KEY ("league_id","id"));
+CREATE TABLE "auction_action_dedup" ("league_id" text NOT NULL REFERENCES "auction_leagues"("id") ON DELETE CASCADE, "action_id" text NOT NULL, "result" jsonb NOT NULL, "created_at" timestamptz NOT NULL DEFAULT now(), PRIMARY KEY ("league_id","action_id"));
+CREATE TABLE "media_assets" ("id" uuid PRIMARY KEY DEFAULT gen_random_uuid(), "league_id" text REFERENCES "auction_leagues"("id") ON DELETE CASCADE, "category" text NOT NULL CHECK ("category" IN ('players','teams','league')), "file_key" text NOT NULL UNIQUE, "url" text NOT NULL, "file_name" text NOT NULL, "mime_type" text NOT NULL, "content_hash" text, "archive_path" text, "entity_type" text, "entity_id" text, "created_at" timestamptz NOT NULL DEFAULT now());
+CREATE INDEX "auction_bids_recent_idx" ON "auction_bids"("league_id","created_at" DESC) WHERE NOT "undone";
+CREATE INDEX "media_assets_league_idx" ON "media_assets"("league_id","category");

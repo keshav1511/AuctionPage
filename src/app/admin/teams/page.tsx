@@ -68,7 +68,7 @@ export default function AdminTeamsPage() {
     setShowAddModal(true);
   };
 
-  // Direct Computer Image Upload Helper communicating with /api/media/upload -> Apps Script DriveApp with compression
+  // Direct image upload through the UploadThing-backed media endpoint.
   const handleFileUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
     setter: (val: string) => void,
@@ -81,7 +81,7 @@ export default function AdminTeamsPage() {
     try {
       const result = await uploadImageSafely(file, "teams");
       setter(result.url);
-      setSuccessNotice("Uploaded image directly to Google Drive.");
+      setSuccessNotice("Uploaded image to the media library.");
       setTimeout(() => setSuccessNotice(null), 3000);
     } catch (err) {
       alert((err as Error).message || "Upload failed");
@@ -385,7 +385,7 @@ export default function AdminTeamsPage() {
                     <label className="cursor-pointer inline-block">
                       <span className="px-3 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5 shadow-sm">
                         {uploadingField === "logo" ? <Loader2 className="w-3 h-3 animate-spin text-emerald-600" /> : <Upload className="w-3 h-3 text-slate-500" />}
-                        {uploadingField === "logo" ? "Uploading to Drive..." : "Upload Logo"}
+                        {uploadingField === "logo" ? "Uploading..." : "Upload Logo"}
                       </span>
                       <input
                         type="file"

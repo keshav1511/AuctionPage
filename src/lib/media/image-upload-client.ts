@@ -1,6 +1,6 @@
 // ==============================================================================
 // CLIENT-SIDE IMAGE VALIDATION, COMPRESSION & SAFE UPLOAD UTILITY
-// Guarantees reliable Google Drive uploads via Apps Script without 413 errors
+// Sends authenticated image uploads to the UploadThing-backed media endpoint.
 // ==============================================================================
 
 export interface ImageValidationResult {
@@ -188,7 +188,6 @@ export async function uploadImageSafely(
   const formData = new FormData();
   formData.append("file", fileToUpload);
   formData.append("folder", folder);
-  formData.append("folderId", "");
 
   // 4. Send request
   let res: Response;
@@ -242,9 +241,7 @@ export async function uploadImageSafely(
     throw new Error(errorMsg);
   }
 
-  if (!data.url) {
-    throw new Error("Google Drive did not return an image URL. Please try uploading again.");
-  }
+  if (!data.url) throw new Error("UploadThing did not return an image URL. Please try again.");
 
   return {
     success: true,

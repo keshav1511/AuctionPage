@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model AuctionLeague {
+  id        String   @id
+  data      Json
+  rules     Json
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  teams     AuctionTeam[]
+  players   AuctionPlayer[]
+  state     AuctionState?
+  bids      AuctionBid[]
+  purchases AuctionPurchase[]
+  auditLogs AuctionAuditLog[]
+  actions   AuctionActionDedup[]
+  assets    MediaAsset[]
+  realtimeRevision AuctionRevision?
+  @@map("auction_leagues")
+}
+
+model AuctionTeam {
+  leagueId String @map("league_id")
+  id String
+  data Json
+  league AuctionLeague @relation(fields:[leagueId], references:[id], onDelete:Cascade)
+  @@id([leagueId,id])
+  @@map("auction_teams")
+}
+model AuctionPlayer {
+  leagueId String @map("league_id")
+  id String
+  data Json
+  league AuctionLeague @relation(fields:[leagueId], references:[id], onDelete:Cascade)
+  @@id([leagueId,id])
+  @@map("auction_players")
+}
+model AuctionState {
+  leagueId String @id @map("league_id")
+  data Json
+  version Int @default(1)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  league AuctionLeague @relation(fields:[leagueId], references:[id], onDelete:Cascade)
+  @@map("auction_states")
+}
+model AuctionBid {
+  leagueId String @map("league_id")
+  id String
+  data Json
+  undone Boolean @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  league AuctionLeague @relation(fields:[leagueId], references:[id], onDelete:Cascade)
+  @@id([leagueId,id])
+  @@index([leagueId,createdAt])
+  @@map("auction_bids")
+}
+model AuctionPurchase {
+  leagueId String @map("league_id")
+  id String
+  data Json
+  createdAt DateTime @default(now()) @map("created_at")
+  league AuctionLeague @relation(fields:[leagueId], references:[id], onDelete:Cascade)
+  @@id([leagueId,id])
+  @@map("auction_purchases")
+}
+model AuctionAuditLog {
+  leagueId String @map("league_id")
+  id String
+  data Json
+  createdAt DateTime @default(now()) @map("created_at")
+  league AuctionLeague @relation(fields:[leagueId], references:[id], onDelete:Cascade)
+  @@id([leagueId,id])
+  @@map("auction_audit_logs")
+}
+model AuctionActionDedup {
+  leagueId String @map("league_id")
+  actionId String @map("action_id")
+  result Json
+  createdAt DateTime @default(now()) @map("created_at")
+  league AuctionLeague @relation(fields:[leagueId], references:[id], onDelete:Cascade)
+  @@id([leagueId,actionId])
+  @@map("auction_action_dedup")
+}
+model MediaAsset {
+  id String @id @default(uuid()) @db.Uuid
+  leagueId String? @map("league_id")
+  category String
+  fileKey String @unique @map("file_key")
+  url String
+  fileName String @map("file_name")
+  mimeType String @map("mime_type")
+  contentHash String? @map("content_hash")
+  archivePath String? @map("archive_path")
+  entityType String? @map("entity_type")
+  entityId String? @map("entity_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  league AuctionLeague? @relation(fields:[leagueId], references:[id], onDelete:Cascade)
+  @@index([leagueId,category])
+  @@map("media_assets")
+}
+
+model AuctionRevision {
+  leagueId String @id @map("league_id")
+  revision BigInt @default(0)
+  league AuctionLeague @relation(fields:[leagueId], references:[id], onDelete:Cascade)
+  @@map("auction_revisions")
+}

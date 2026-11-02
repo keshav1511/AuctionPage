@@ -58,9 +58,10 @@ function LiveAuctionContent() {
   }, [queryTournamentId]);
 
   const effectiveLeagueId = resolvedTournamentId || activeLeague.id || "league-main";
-  const currentLeague = resolvedTournament || activeLeague;
+
 
   const {
+    league: liveLeague,
     session,
     teams: liveTeams,
     players: livePlayers,
@@ -69,6 +70,8 @@ function LiveAuctionContent() {
     currentRevision,
     remainingSeconds,
   } = useRealtimeAuction(effectiveLeagueId);
+
+  const currentLeague = liveLeague || resolvedTournament || activeLeague;
 
   // Authoritative 5-second announcement timer & deduplication management
   const [announcementRemaining, setAnnouncementRemaining] = useState<number>(0);

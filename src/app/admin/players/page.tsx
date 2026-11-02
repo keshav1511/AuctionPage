@@ -12,16 +12,11 @@ import { useLeague } from "@/lib/context/league-context";
 import { ImportModal } from "@/components/admin/import-modal";
 import { Player, PlayerRole } from "@/types";
 import { uploadImageSafely } from "@/lib/media/image-upload-client";
-import {
-  matchEntitiesWithDriveFiles,
-  MatchEntity,
-  EntityMatchResult,
-} from "@/lib/google/drive-matcher";
+import type { EntityMatchResult } from "@/lib/google/drive-matcher";
 import {
   FileSpreadsheet,
   Search,
   RefreshCw,
-  FolderSync,
   CheckCircle2,
   Image as ImageIcon,
   Check,
@@ -39,8 +34,8 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
-// Upload helper communicating with protected /api/media/upload -> Apps Script DriveApp with client compression & safe parsing
-async function uploadImageToDrive(file: File, folder: "players" | "teams" | "league" = "players"): Promise<string> {
+// Upload helper communicating with the protected UploadThing-backed media endpoint.
+async function uploadImage(file: File, folder: "players" | "teams" | "league" = "players"): Promise<string> {
   const result = await uploadImageSafely(file, folder);
   return result.url;
 }
@@ -53,20 +48,20 @@ function getPlayerInitials(name: string): string {
 }
 
 export default function AdminPlayersPage() {
-  const { activeLeague, players, setPlayersForActiveLeague, updatePlayer, teams, updateTeam } = useLeague();
+  const { activeLeague, players, addPlayers, setPlayersForActiveLeague, updatePlayer, teams, updateTeam } = useLeague();
 
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<"directory" | "photo_matching">("directory");
   const [photoSubTab, setPhotoSubTab] = useState<"players" | "owners" | "icons">("players");
 
   const [showImportModal, setShowImportModal] = useState(false);
-  const [isMatchingDrive, setIsMatchingDrive] = useState(false);
-  const [driveSyncStatus, setDriveSyncStatus] = useState<string | null>(null);
+  const [isMatchingAssets, setIsMatchingAssets] = useState(false);
+  const [assetStatus, setAssetStatus] = useState<string | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
 
   // Photo matching results state
   const [entityMatches, setEntityMatches] = useState<EntityMatchResult[]>([]);
-  const [driveFilesList, setDriveFilesList] = useState<Array<{ id: string; name: string; directUrl?: string }>>([]);
+  const [assetFilesList] = useState<Array<{ id: string; name: string; directUrl?: string }>>([]);
 
   // Inline edited base prices state
   const [editedBasePrices, setEditedBasePrices] = useState<Record<string, number>>({});
@@ -74,6 +69,7 @@ export default function AdminPlayersPage() {
 
   // Edit Player Modal state
   const [editingPlayer, setEditingPlayer] = useState<Player | null>(null);
+  const [isAddingPlayer, setIsAddingPlayer] = useState(false);
   const [editFullName, setEditFullName] = useState("");
   const [editRegNo, setEditRegNo] = useState("");
   const [editRole, setEditRole] = useState<PlayerRole>("ALL_ROUNDER");
@@ -173,7 +169,7 @@ export default function AdminPlayersPage() {
 
     try {
       const folder = entityId.startsWith("owner-") || entityId.startsWith("icon-") ? "teams" : "players";
-      const uploadedUrl = await uploadImageToDrive(file, folder);
+      const uploadedUrl = await uploadImage(file, folder);
 
       setEntityMatches((prev) =>
         prev.map((item) =>
@@ -215,13 +211,13 @@ export default function AdminPlayersPage() {
   const handlePhotoUploadForPlayer = async (playerId: string, file: File) => {
     setUploadingPlayerId(playerId);
     try {
-      const url = await uploadImageToDrive(file, "players");
+      const url = await uploadImage(file, "players");
       updatePlayer(playerId, {
         photoUrl: url,
         normalizedPhotoUrl: url,
         photoMatchStatus: "MANUAL_OVERRIDE",
       });
-      setSuccessNotice("Player photograph uploaded and linked to Google Drive.");
+      setSuccessNotice("Player photograph uploaded and linked.");
       setTimeout(() => setSuccessNotice(null), 3000);
     } catch (err) {
       alert((err as Error).message || "Failed to upload photo");
@@ -240,12 +236,22 @@ export default function AdminPlayersPage() {
     setEditPhotoUrl(player.photoUrl || "");
   };
 
+  const openAddPlayerModal = () => {
+    setEditingPlayer(null);
+    setEditFullName("");
+    setEditRegNo("");
+    setEditRole("ALL_ROUNDER");
+    setEditBasePrice(activeLeague.defaultBasePrice || 2000);
+    setEditPhotoUrl("");
+    setIsAddingPlayer(true);
+  };
+
   const handleModalPhotoUpload = async (file: File) => {
     setIsModalUploading(true);
     try {
-      const url = await uploadImageToDrive(file, "players");
+      const url = await uploadImage(file, "players");
       setEditPhotoUrl(url);
-      setSuccessNotice("Photograph uploaded to Google Drive.");
+      setSuccessNotice("Photograph uploaded.");
       setTimeout(() => setSuccessNotice(null), 3000);
     } catch (err) {
       alert((err as Error).message || "Failed to upload photo");
@@ -273,6 +279,13 @@ export default function AdminPlayersPage() {
     setTimeout(() => setSuccessNotice(null), 3000);
   };
 
+  const handleAddPlayer = () => {
+    if (!editFullName.trim()) return;
+    addPlayers([{ id: `player-${Date.now()}`, seasonId: activeLeague.id, fullName: editFullName.trim(), registrationNo: editRegNo.trim(), primaryRole: editRole, basePrice: editBasePrice, basePriceOverride: editBasePrice, photoUrl: editPhotoUrl, normalizedPhotoUrl: editPhotoUrl, photoMatchStatus: editPhotoUrl ? "MANUAL_OVERRIDE" : "UNMATCHED", status: "AVAILABLE", sortOrder: players.length + 1 }]);
+    setIsAddingPlayer(false);
+    setSuccessNotice(`Added ${editFullName.trim()} to the player pool.`);
+  };
+
   const handleDeletePlayer = (playerId: string, playerName: string) => {
     if (confirm(`Are you sure you want to delete ${playerName} from the player pool?`)) {
       setPlayersForActiveLeague(players.filter((p) => p.id !== playerId));
@@ -282,98 +295,25 @@ export default function AdminPlayersPage() {
     }
   };
 
-  // Run Google Drive Photo Sync & Multi-Entity Matching
-  const handleRunDriveSync = async () => {
-    setIsMatchingDrive(true);
-    setDriveSyncStatus("Connecting to Google Drive folder API v3...");
-
-    try {
-      const res = await fetch("/api/drive/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ folderUrl: activeLeague.googleDriveFolderUrl }),
-      });
-      const data = await res.json();
-
-      if (data.success && data.files) {
-        setDriveFilesList(data.files);
-
-        // Build entities to match: Players, Owners, Icons separately
-        const entitiesToMatch: MatchEntity[] = [
-          ...players.map((p) => ({
-            id: p.id,
-            name: p.fullName,
-            type: "PLAYER" as const,
-            currentPhotoUrl: p.photoUrl,
-          })),
-          ...teams.map((t) => ({
-            id: `owner-${t.id}`,
-            name: t.ownerName,
-            type: "OWNER" as const,
-            teamId: t.id,
-            teamName: t.name,
-            currentPhotoUrl: t.ownerPhotoUrl,
-          })),
-          ...teams.map((t) => ({
-            id: `icon-${t.id}`,
-            name: t.iconPlayerName || "Icon",
-            type: "ICON" as const,
-            teamId: t.id,
-            teamName: t.name,
-            currentPhotoUrl: t.iconPlayerPhotoUrl,
-          })),
-        ];
-
-        const matchSummary = matchEntitiesWithDriveFiles(entitiesToMatch, data.files);
-        setEntityMatches(matchSummary.results);
-
-        // Apply automatic high-confidence player matches
-        setPlayersForActiveLeague(
-          players.map((p) => {
-            const match = matchSummary.players.find((m) => m.entityId === p.id && m.status === "AUTO_MATCHED");
-            if (match && match.fileUrl) {
-              return {
-                ...p,
-                photoUrl: match.fileUrl,
-                normalizedPhotoUrl: match.fileUrl,
-                photoMatchStatus: "MATCHED",
-                driveFileId: match.fileId,
-              };
-            }
-            return p;
-          })
-        );
-
-        // Apply automatic owner & icon matches to teams
-        teams.forEach((t) => {
-          const ownerMatch = matchSummary.owners.find((m) => m.entityId === `owner-${t.id}` && m.status === "AUTO_MATCHED");
-          const iconMatch = matchSummary.icons.find((m) => m.entityId === `icon-${t.id}` && m.status === "AUTO_MATCHED");
-
-          if (ownerMatch || iconMatch) {
-            updateTeam(t.id, {
-              ownerPhotoUrl: ownerMatch?.fileUrl || t.ownerPhotoUrl,
-              iconPlayerPhotoUrl: iconMatch?.fileUrl || t.iconPlayerPhotoUrl,
-            });
-          }
-        });
-
-        setDriveSyncStatus(
-          `Drive sync complete: ${matchSummary.matchedCount} photographs matched across players, owners, and icons.`
-        );
-        setSuccessNotice(`Google Drive match complete: ${matchSummary.matchedCount} photographs linked!`);
-        setActiveTab("photo_matching");
-      }
-    } catch {
-      setDriveSyncStatus("Drive sync completed with fallback catalog.");
-    } finally {
-      setIsMatchingDrive(false);
-      setTimeout(() => setSuccessNotice(null), 4000);
-    }
+  // Shows the local assignment screen. ZIP assets are linked by the server importer;
+  // administrators can upload a replacement where an asset is unassigned.
+  const handleOpenAssetMatching = () => {
+    setIsMatchingAssets(true);
+    setEntityMatches([
+      ...players.map((p) => ({ entityId: p.id, entityName: p.fullName, entityType: "PLAYER" as const, fileUrl: p.photoUrl, confidence: 0, confidenceLabel: p.photoUrl ? "EXACT" as const : "UNMATCHED" as const, status: p.photoUrl ? "MANUAL_ASSIGNED" as const : "UNMATCHED" as const })),
+      ...teams.flatMap((t) => [
+        { entityId: `owner-${t.id}`, entityName: t.ownerName, entityType: "OWNER" as const, teamName: t.name, fileUrl: t.ownerPhotoUrl, confidence: 0, confidenceLabel: t.ownerPhotoUrl ? "EXACT" as const : "UNMATCHED" as const, status: t.ownerPhotoUrl ? "MANUAL_ASSIGNED" as const : "UNMATCHED" as const },
+        { entityId: `icon-${t.id}`, entityName: t.iconPlayerName || "Icon", entityType: "ICON" as const, teamName: t.name, fileUrl: t.iconPlayerPhotoUrl, confidence: 0, confidenceLabel: t.iconPlayerPhotoUrl ? "EXACT" as const : "UNMATCHED" as const, status: t.iconPlayerPhotoUrl ? "MANUAL_ASSIGNED" as const : "UNMATCHED" as const },
+      ]),
+    ]);
+    setAssetStatus("Upload a replacement image for any unassigned person.");
+    setActiveTab("photo_matching");
+    setIsMatchingAssets(false);
   };
 
-  // Manual Photo Assignment from Drive File Dropdown
-  const handleAssignDrivePhoto = (entityId: string, fileId: string) => {
-    const selectedFile = driveFilesList.find((f) => f.id === fileId);
+  // Manual Photo Assignment from the imported asset picker.
+  const handleAssignAssetPhoto = (entityId: string, fileId: string) => {
+    const selectedFile = assetFilesList.find((f) => f.id === fileId);
     if (!selectedFile) return;
 
     const fileUrl = selectedFile.directUrl || `https://lh3.googleusercontent.com/d/${selectedFile.id}`;
@@ -433,6 +373,7 @@ export default function AdminPlayersPage() {
           subtitle={`${activeLeague.name} • ${players.length} Registered Players`}
           action={
             <div className="flex items-center gap-2">
+              <Button type="button" onClick={openAddPlayerModal} size="sm" variant="outline" className="gap-2 border-slate-300 text-slate-700 bg-white hover:bg-slate-50 font-medium text-xs"><User className="w-3.5 h-3.5" />Add Player</Button>
               <Button
                 type="button"
                 onClick={() => setShowImportModal(true)}
@@ -444,14 +385,14 @@ export default function AdminPlayersPage() {
               </Button>
               <Button
                 type="button"
-                onClick={handleRunDriveSync}
-                disabled={isMatchingDrive}
+                onClick={handleOpenAssetMatching}
+                disabled={isMatchingAssets}
                 size="sm"
                 variant="outline"
                 className="gap-2 border-slate-300 text-slate-700 bg-white hover:bg-slate-50 font-medium text-xs"
               >
-                <FolderSync className={`w-3.5 h-3.5 ${isMatchingDrive ? "animate-spin" : ""}`} />
-                {isMatchingDrive ? "Syncing Drive..." : "Sync Drive Photos"}
+                <ImageIcon className={`w-3.5 h-3.5 ${isMatchingAssets ? "animate-spin" : ""}`} />
+                {isMatchingAssets ? "Opening assets..." : "Assign Photos"}
               </Button>
             </div>
           }
@@ -465,10 +406,10 @@ export default function AdminPlayersPage() {
             </div>
           )}
 
-          {driveSyncStatus && !successNotice && (
+          {assetStatus && !successNotice && (
             <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl text-xs font-medium text-blue-800 flex items-center gap-2">
               <RefreshCw className="w-4 h-4 text-blue-600 animate-spin" />
-              {driveSyncStatus}
+              {assetStatus}
             </div>
           )}
 
@@ -497,7 +438,7 @@ export default function AdminPlayersPage() {
                 }`}
               >
                 <ImageIcon className="w-4 h-4" />
-                Google Drive Photo Matching
+                Photo Assignment
                 {entityMatches.length > 0 && (
                   <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">
                     {entityMatches.filter((m) => m.status === "AUTO_MATCHED").length} Matched
@@ -715,26 +656,26 @@ export default function AdminPlayersPage() {
               </div>
             )
           ) : (
-            /* Tab 2: Google Drive Photo Matching Studio */
+            /* Tab 2: asset assignment studio */
             <div className="space-y-6">
-              {/* Drive Status Bar */}
+              {/* Asset status */}
               <div className="p-5 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900">Google Drive Photograph Matching Studio</h3>
+                  <h3 className="text-sm font-bold text-slate-900">Photograph Assignment</h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Separately matches Player names, Franchise Owner names, and Icon Player names against Drive photos.
+                    Assign uploaded images to players, franchise owners, and icon players.
                   </p>
                 </div>
 
                 <div className="flex items-center gap-2">
                   <Button
                     type="button"
-                    onClick={handleRunDriveSync}
-                    disabled={isMatchingDrive}
+                    onClick={handleOpenAssetMatching}
+                    disabled={isMatchingAssets}
                     size="sm"
                     className="bg-slate-900 hover:bg-slate-800 text-white text-xs gap-1.5"
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isMatchingDrive ? "animate-spin" : ""}`} />
+                    <RefreshCw className={`w-3.5 h-3.5 ${isMatchingAssets ? "animate-spin" : ""}`} />
                     Refresh Matches
                   </Button>
                 </div>
@@ -821,21 +762,21 @@ export default function AdminPlayersPage() {
                         )}
 
                         <p className="text-[10px] text-slate-400 font-mono truncate">
-                          {item.fileName ? `File: ${item.fileName}` : "No Drive file matched"}
+                          {item.fileName ? `File: ${item.fileName}` : "No uploaded file assigned"}
                         </p>
                       </div>
                     </div>
 
-                    {/* Actions: Choose from Drive Dropdown or Upload Local */}
+                    {/* Actions: Choose an imported asset or upload a replacement */}
                     <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
-                      {driveFilesList.length > 0 && (
+                      {assetFilesList.length > 0 && (
                         <select
                           value={item.fileId || ""}
-                          onChange={(e) => handleAssignDrivePhoto(item.entityId, e.target.value)}
+                          onChange={(e) => handleAssignAssetPhoto(item.entityId, e.target.value)}
                           className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-[11px] text-slate-700 focus:outline-none"
                         >
-                          <option value="">-- Choose Drive Photo --</option>
-                          {driveFilesList.map((f) => (
+                          <option value="">-- Choose Uploaded Photo --</option>
+                          {assetFilesList.map((f) => (
                             <option key={f.id} value={f.id}>
                               {f.name}
                             </option>
@@ -863,10 +804,10 @@ export default function AdminPlayersPage() {
                 <div className="p-12 text-center bg-white border border-slate-200 rounded-2xl space-y-3">
                   <ImageIcon className="w-8 h-8 text-slate-300 mx-auto" />
                   <p className="text-xs text-slate-500">
-                    Click &quot;Sync Drive Photos&quot; above to scan the Google Drive folder and match photos.
+                    Open photo assignment above to upload and link a photograph.
                   </p>
                   <Button
-                    onClick={handleRunDriveSync}
+                    onClick={handleOpenAssetMatching}
                     size="sm"
                     className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs"
                   >
@@ -880,16 +821,16 @@ export default function AdminPlayersPage() {
       </div>
 
       {/* Individual Edit Player Modal */}
-      {editingPlayer && (
+      {(editingPlayer || isAddingPlayer) && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full p-6 space-y-5 my-8">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
-                <h3 className="text-base font-bold text-slate-900">Edit Player Details</h3>
-                <p className="text-xs text-slate-500">ID: {editingPlayer.id}</p>
+                <h3 className="text-base font-bold text-slate-900">{isAddingPlayer ? "Add Player" : "Edit Player Details"}</h3>
+                {!isAddingPlayer && <p className="text-xs text-slate-500">ID: {editingPlayer?.id}</p>}
               </div>
               <button
-                onClick={() => setEditingPlayer(null)}
+                onClick={() => { setEditingPlayer(null); setIsAddingPlayer(false); }}
                 className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
               >
                 <X className="w-4 h-4" />
@@ -911,7 +852,7 @@ export default function AdminPlayersPage() {
                 <div className="space-y-2 flex-1">
                   <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 font-semibold text-slate-700">
                     {isModalUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" /> : <Upload className="w-3.5 h-3.5" />}
-                    {isModalUploading ? "Uploading to Drive..." : "Upload Photo"}
+                    {isModalUploading ? "Uploading..." : "Upload Photo"}
                     <input
                       type="file"
                       accept="image/*"
@@ -933,7 +874,7 @@ export default function AdminPlayersPage() {
                     </button>
                   )}
                   <p className="text-[10px] text-slate-400">
-                    Images are uploaded directly to the Google Drive folder.
+                    Images are stored in the tournament media library.
                   </p>
                 </div>
               </div>
@@ -989,7 +930,8 @@ export default function AdminPlayersPage() {
               <Button
                 type="button"
                 variant="ghost"
-                onClick={() => handleDeletePlayer(editingPlayer.id, editingPlayer.fullName)}
+                onClick={() => editingPlayer && handleDeletePlayer(editingPlayer.id, editingPlayer.fullName)}
+                disabled={isAddingPlayer}
                 className="text-red-600 hover:text-red-700 hover:bg-red-50 text-xs h-8"
               >
                 <Trash2 className="w-3.5 h-3.5 mr-1" />
@@ -1000,17 +942,17 @@ export default function AdminPlayersPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setEditingPlayer(null)}
+                  onClick={() => { setEditingPlayer(null); setIsAddingPlayer(false); }}
                   className="text-xs h-8 border-slate-300"
                 >
                   Cancel
                 </Button>
                 <Button
                   type="button"
-                  onClick={handleSaveEditedPlayer}
+                  onClick={isAddingPlayer ? handleAddPlayer : handleSaveEditedPlayer}
                   className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-8 font-semibold"
                 >
-                  Save Changes
+                  {isAddingPlayer ? "Add Player" : "Save Changes"}
                 </Button>
               </div>
             </div>
