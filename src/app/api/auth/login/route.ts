@@ -41,7 +41,6 @@ export async function POST(req: NextRequest) {
         role: "SUPER_ADMIN",
         leagueId: leagueId || "all",
       },
-      token: sessionToken,
     });
 
     // Set secure HttpOnly cookie

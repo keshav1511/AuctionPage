@@ -157,18 +157,23 @@ export function clearAdminSessionCookie(res: NextResponse): void {
  * Validates configured administrator credentials
  */
 export function validateAdminCredentials(email: string, password: string): boolean {
-  const configuredEmail = (process.env.ADMIN_EMAIL || process.env.DEMO_ADMIN_EMAIL || "admin@ntlcricket.com").trim().toLowerCase();
-  const configuredPassword = process.env.ADMIN_PASSWORD || process.env.DEMO_ADMIN_PASSWORD || "Admin@NTL2026";
+  const configuredEmail = (process.env.ADMIN_EMAIL || "admin@ntlcricket.com").trim().toLowerCase();
+  const configuredPassword = process.env.ADMIN_PASSWORD || "Admin@NTL2026";
 
   const cleanEmail = email.trim().toLowerCase();
   const emailMatch =
     cleanEmail === configuredEmail ||
-    cleanEmail === "commissioner@ntlcricket.com" ||
-    cleanEmail === "admin@ntlcricket.com";
+    (!process.env.ADMIN_EMAIL &&
+      (cleanEmail === "commissioner@ntlcricket.com" || cleanEmail === "admin@ntlcricket.com"));
 
-  // Check demo placeholder in non-production environments
+  // In production, demo placeholder passwords ("••••••••••••") must NEVER be accepted
+  if (process.env.NODE_ENV === "production" && password === "••••••••••••") {
+    return false;
+  }
+
+  // Check demo placeholder strictly in local non-production development environments
   const effectivePassword =
-    password === "••••••••••••" && process.env.NODE_ENV !== "production"
+    password === "••••••••••••" && process.env.NODE_ENV === "development"
       ? configuredPassword
       : password;
 

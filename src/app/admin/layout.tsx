@@ -6,11 +6,12 @@ import { usePathname, useRouter } from "next/navigation";
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [isVerifying, setIsVerifying] = useState(pathname !== "/admin/login");
+  const isLoginPage = pathname === "/admin/login" || pathname.startsWith("/admin/login/");
+  const [isVerifying, setIsVerifying] = useState(!isLoginPage);
 
   useEffect(() => {
     // Skip verification loop for login page
-    if (pathname === "/admin/login") {
+    if (isLoginPage) {
       setIsVerifying(false);
       return;
     }
@@ -32,7 +33,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       })
       .then((data) => {
         if (!isCancelled) {
-          if (!data || !data.success) {
+          const isAuthed = Boolean(data && (data.authenticated === true || data.success === true));
+          if (!isAuthed) {
             router.replace(`/admin/login?from=${encodeURIComponent(pathname)}`);
           } else {
             setIsVerifying(false);
@@ -49,10 +51,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       isCancelled = true;
       window.removeEventListener("pageshow", handlePageShow);
     };
-  }, [pathname, router]);
+  }, [pathname, isLoginPage, router]);
 
   // Login page bypasses layout loading screen
-  if (pathname === "/admin/login") {
+  if (isLoginPage) {
     return <>{children}</>;
   }
 

@@ -16,7 +16,7 @@ export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // 1. Exclude public admin login page
-  if (pathname === "/admin/login") {
+  if (pathname === "/admin/login" || pathname.startsWith("/admin/login/")) {
     return NextResponse.next();
   }
 
