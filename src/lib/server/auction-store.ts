@@ -70,6 +70,7 @@ export interface AuctionRealtimeEvent {
   type: string;
   leagueId: string;
   timestamp: string;
+  revision?: number;
   session?: AuctionSession;
   teams?: Team[];
   players?: Player[];
@@ -154,11 +155,20 @@ function buildAuctionSession(
   rules: AuctionRules
 ): AuctionSession {
   const currentPlayer = state.currentPlayerId
-    ? players.find((p) => p.id === state.currentPlayerId) || null
+    ? players.find(
+        (p) =>
+          p.id === state.currentPlayerId ||
+          p.registrationNo === state.currentPlayerId ||
+          (p.fullName && p.fullName === state.currentPlayerId)
+      ) || null
     : null;
 
   const currentLeadingTeam = state.currentLeadingTeamId
-    ? teams.find((t) => t.id === state.currentLeadingTeamId) || null
+    ? teams.find(
+        (t) =>
+          t.id === state.currentLeadingTeamId ||
+          t.shortCode === state.currentLeadingTeamId
+      ) || null
     : null;
 
   let round2Queue: Round2QueueItem[] | undefined;
@@ -197,6 +207,8 @@ function buildAuctionSession(
     }
   } catch {}
 
+  const stateVersion = Number(state.version) || 1;
+
   return {
     id: state.id,
     seasonId: state.seasonId,
@@ -217,6 +229,9 @@ function buildAuctionSession(
     announcement,
     bidCount: state.bidCount || 0,
     recentBids,
+    version: stateVersion,
+    revision: stateVersion,
+    updatedAt: state.updatedAt || new Date().toISOString(),
   };
 }
 
@@ -409,6 +424,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
         type: "LEAGUE_UPDATED",
         leagueId,
         timestamp: nowIso,
+        revision: freshState.session.revision || freshState.session.version || 1,
         session: freshState.session,
         league: freshState.league,
       });
@@ -432,6 +448,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
         type: "RULES_UPDATED",
         leagueId,
         timestamp: nowIso,
+        revision: freshState.session.revision || freshState.session.version || 1,
         session: freshState.session,
         rules: freshState.rules,
       });
@@ -448,6 +465,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
         type: "TEAMS_UPDATED",
         leagueId,
         timestamp: nowIso,
+        revision: freshState.session.revision || freshState.session.version || 1,
         session: freshState.session,
         teams: freshState.teams,
       });
@@ -481,6 +499,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
         type: "PLAYERS_UPDATED",
         leagueId,
         timestamp: nowIso,
+        revision: freshState.session.revision || freshState.session.version || 1,
         session: freshState.session,
         players: freshState.players,
       });
@@ -508,18 +527,39 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
           return { success: false, error: "Franchise not found" };
         }
 
+        // Authoritative Dynamic Minimum Purse Reserve & Maximum Bid Validation (Phase 5.3)
+        const currentPlayer = state.currentPlayerId
+          ? players.find((p) => p.id === state.currentPlayerId) || null
+          : null;
+
+        // Ensure player has a configured base price (> 0); reject unset or ₹0 base price bidding
+        const effectiveBasePrice =
+          currentPlayer?.basePriceOverride ||
+          currentPlayer?.basePrice ||
+          rules.basePrice ||
+          0;
+
+        if (effectiveBasePrice <= 0) {
+          return {
+            success: false,
+            error: `Cannot place bid: Player "${currentPlayer?.fullName || state.currentPlayerId}" has no configured base price (unset / ₹0). An administrator must configure a base price before opening bidding.`,
+          };
+        }
+
         const currentHighest = state.currentHighestBid || 0;
-        if (amount <= currentHighest && state.bidCount > 0) {
+        if (state.bidCount === 0) {
+          if (amount < effectiveBasePrice) {
+            return {
+              success: false,
+              error: `Opening bid of ₹${amount.toLocaleString()} must be at least player base price of ₹${effectiveBasePrice.toLocaleString()}`,
+            };
+          }
+        } else if (amount <= currentHighest) {
           return {
             success: false,
             error: `Bid of ₹${amount.toLocaleString()} must strictly exceed current highest bid of ₹${currentHighest.toLocaleString()}`,
           };
         }
-
-        // Authoritative Dynamic Minimum Purse Reserve & Maximum Bid Validation (Phase 5.3)
-        const currentPlayer = state.currentPlayerId
-          ? players.find((p) => p.id === state.currentPlayerId) || null
-          : null;
 
         // Accurate count of valid purchased players (unsold players strictly excluded)
         const teamPurchasedPlayers = players.filter(
@@ -642,7 +682,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
 
         const initialDuration = rules.initialTimerSeconds || 45;
         const expiryIso = new Date(Date.now() + initialDuration * 1000).toISOString();
-        const basePrice = targetPlayer.basePriceOverride || targetPlayer.basePrice || 25000;
+        const basePrice = targetPlayer.basePriceOverride || targetPlayer.basePrice || rules.basePrice || 0;
 
         const updatedPlayers = players.map((p) =>
           p.id === targetPlayer!.id
@@ -1290,6 +1330,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
       type: eventType,
       leagueId,
       timestamp: nowIso,
+      revision: freshState.session.revision || freshState.session.version || 1,
       session: freshState.session,
       teams: freshState.teams,
       players: freshState.players,

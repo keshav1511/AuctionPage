@@ -3,13 +3,11 @@
 import React, { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Player } from "@/types";
 import {
-  detectRegistrationColumns,
-  parseRegistrationRows,
-  ColumnMappingConfig,
+  detectFlexiblePlayerColumns,
+  parseFlexiblePlayerRows,
+  FlexibleColumnMapping,
 } from "@/lib/sheets/registration-parser";
 import {
   FileSpreadsheet,
@@ -19,10 +17,7 @@ import {
   RefreshCw,
   X,
   Table,
-  Users,
-  Award,
-  Shield,
-  FolderOpen,
+  CheckCircle2,
 } from "lucide-react";
 
 export interface ParsedSheetPayload {
@@ -55,7 +50,7 @@ export function ImportModal({
   onClose,
   defaultSheetUrl,
   defaultDriveUrl,
-  defaultBasePrice,
+  defaultBasePrice = 2000,
   existingPlayerCount = 0,
   onImportComplete,
   activeLeagueId,
@@ -79,16 +74,16 @@ export function ImportModal({
   const [availableSheets, setAvailableSheets] = useState<string[]>([]);
   const [selectedSheet, setSelectedSheet] = useState<string>("");
 
-  // Column Mapping state
-  const [mapping, setMapping] = useState<ColumnMappingConfig>({
+  // Flexible Column Mapping state
+  const [mapping, setMapping] = useState<FlexibleColumnMapping>({
     nameCol: "",
-    typeCol: "",
-    teamCol: "",
-    regNoCol: "",
-    categoryCol: "",
-    roleCol: "",
-    priceCol: "",
-    photoCol: "",
+    regNoCol: undefined,
+    roleCol: undefined,
+    priceCol: undefined,
+    ageCol: undefined,
+    photoCol: undefined,
+    teamCol: undefined,
+    typeCol: undefined,
   });
 
   // Step state: 1 = source & parse, 2 = map columns & preview
@@ -118,7 +113,7 @@ export function ImportModal({
       setParsedData(data);
       setAvailableSheets(data.sheets || []);
       setSelectedSheet(data.activeSheet || "");
-      const detected = detectRegistrationColumns(data.headers || [], data.rows || []);
+      const detected = detectFlexiblePlayerColumns(data.headers || [], data.rows || []);
       setMapping(detected);
       setStep(2);
     } catch (err: unknown) {
@@ -156,7 +151,7 @@ export function ImportModal({
       setParsedData(data);
       setAvailableSheets(data.sheets || []);
       setSelectedSheet(data.activeSheet || "");
-      const detected = detectRegistrationColumns(data.headers || [], data.rows || []);
+      const detected = detectFlexiblePlayerColumns(data.headers || [], data.rows || []);
       setMapping(detected);
       setStep(2);
     } catch (err: unknown) {
@@ -166,9 +161,9 @@ export function ImportModal({
     }
   };
 
-  // Derive transformed rows with categorization using pure parser
+  // Derive transformed rows using flexible parser
   const validationSummary = parsedData
-    ? parseRegistrationRows(parsedData.headers, parsedData.rows, mapping, defaultBasePrice || 2000)
+    ? parseFlexiblePlayerRows(parsedData.headers, parsedData.rows, mapping, defaultBasePrice)
     : null;
 
   const derivedPlayers: Player[] = [];
@@ -180,26 +175,25 @@ export function ImportModal({
       if (rec.type === "OWNER") {
         derivedOwners.push({
           name: rec.name,
-          photoUrl: rec.resolvedPhotoUrl || rec.photoRef || undefined,
+          photoUrl: rec.photoUrl || undefined,
           teamName: rec.teamAffiliation,
         });
       } else if (rec.type === "ICON") {
         derivedIcons.push({
           name: rec.name,
-          photoUrl: rec.resolvedPhotoUrl || rec.photoRef || undefined,
+          photoUrl: rec.photoUrl || undefined,
           teamName: rec.teamAffiliation,
         });
         derivedPlayers.push({
           id: `player-icon-${idx}-${Date.now()}`,
           seasonId: activeLeagueId,
-          registrationNo: `ICON-${String(idx + 1).padStart(3, "0")}`,
+          registrationNo: rec.registrationNo || "",
           fullName: rec.name,
-          category: rec.category || undefined,
-          primaryRole: rec.role || "ALL_ROUNDER",
-          battingStyle: "Right-Hand Bat",
-          bowlingStyle: "Right-Arm Medium",
-          photoUrl: rec.resolvedPhotoUrl || rec.photoRef || "",
-          basePrice: rec.basePrice || defaultBasePrice || 2000,
+          primaryRole: rec.role || "",
+          battingStyle: "",
+          bowlingStyle: "",
+          photoUrl: rec.photoUrl || "",
+          basePrice: rec.basePrice != null ? rec.basePrice : 0,
           status: "AVAILABLE",
           sortOrder: idx + 1,
         });
@@ -207,14 +201,13 @@ export function ImportModal({
         derivedPlayers.push({
           id: `player-import-${idx}-${Date.now()}`,
           seasonId: activeLeagueId,
-          registrationNo: `REG-${String(idx + 1).padStart(3, "0")}`,
+          registrationNo: rec.registrationNo || "",
           fullName: rec.name,
-          category: rec.category || undefined,
-          primaryRole: rec.role || "ALL_ROUNDER",
-          battingStyle: "Right-Hand Bat",
-          bowlingStyle: "Right-Arm Medium",
-          photoUrl: rec.resolvedPhotoUrl || rec.photoRef || "",
-          basePrice: rec.basePrice || defaultBasePrice || 2000,
+          primaryRole: rec.role || "",
+          battingStyle: "",
+          bowlingStyle: "",
+          photoUrl: rec.photoUrl || "",
+          basePrice: rec.basePrice != null ? rec.basePrice : 0,
           status: "AVAILABLE",
           sortOrder: idx + 1,
         });
@@ -232,7 +225,6 @@ export function ImportModal({
     setErrorNotice(null);
 
     try {
-      // If importing from Google Sheets, invoke server datasource import route
       if (sourceType === "sheets" && sheetUrl.trim()) {
         const res = await fetch("/api/datasource/import", {
           method: "POST",
@@ -264,6 +256,14 @@ export function ImportModal({
     }
   };
 
+  // Determine dynamic columns to show in preview table
+  const showRegNoCol = Boolean(mapping.regNoCol);
+  const showRoleCol = Boolean(mapping.roleCol);
+  const showPriceCol = Boolean(mapping.priceCol);
+  const showAgeCol = Boolean(mapping.ageCol);
+  const showTeamCol = Boolean(mapping.teamCol);
+  const showPhotoCol = Boolean(mapping.photoCol);
+
   return (
     <Dialog open={isOpen} onOpenChange={(open: boolean) => !open && onClose()}>
       <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col p-0 overflow-hidden bg-white text-slate-900 border border-slate-200 shadow-xl rounded-2xl">
@@ -272,10 +272,10 @@ export function ImportModal({
             <div>
               <DialogTitle className="text-xl font-bold text-slate-900 flex items-center gap-2">
                 <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
-                Import Tournament & Player Data
+                Flexible Player Import (Excel / Sheets)
               </DialogTitle>
               <DialogDescription className="text-xs text-slate-500 mt-1">
-                Import player rosters, franchise owners, and icon players via Google Sheets or Excel (.xlsx / .xls).
+                Player Name is the only required field. All other columns are extracted dynamically without arbitrary classifications.
               </DialogDescription>
             </div>
             <button
@@ -289,17 +289,25 @@ export function ImportModal({
           {/* Stepper indicator */}
           <div className="flex items-center gap-4 mt-4 text-xs font-semibold">
             <span className={`flex items-center gap-1.5 ${step === 1 ? "text-emerald-700" : "text-slate-500"}`}>
-              <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] ${step === 1 ? "bg-emerald-600 text-white font-bold" : "bg-slate-100 text-slate-700"}`}>
+              <span
+                className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] ${
+                  step === 1 ? "bg-emerald-600 text-white font-bold" : "bg-slate-100 text-slate-700"
+                }`}
+              >
                 1
               </span>
-              Select Data Source
+              Select File / Sheets
             </span>
             <ArrowRight className="w-3.5 h-3.5 text-slate-300" />
             <span className={`flex items-center gap-1.5 ${step === 2 ? "text-emerald-700" : "text-slate-400"}`}>
-              <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] ${step === 2 ? "bg-emerald-600 text-white font-bold" : "bg-slate-100 text-slate-400"}`}>
+              <span
+                className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] ${
+                  step === 2 ? "bg-emerald-600 text-white font-bold" : "bg-slate-100 text-slate-400"
+                }`}
+              >
                 2
               </span>
-              Map Columns & Preview
+              Preview & Confirm
             </span>
           </div>
         </DialogHeader>
@@ -320,18 +328,6 @@ export function ImportModal({
               <div className="flex border-b border-slate-200 gap-6">
                 <button
                   type="button"
-                  onClick={() => setSourceType("sheets")}
-                  className={`pb-3 text-sm font-semibold border-b-2 transition-colors flex items-center gap-2 ${
-                    sourceType === "sheets"
-                      ? "border-emerald-600 text-emerald-700"
-                      : "border-transparent text-slate-500 hover:text-slate-800"
-                  }`}
-                >
-                  <FileSpreadsheet className="w-4 h-4" />
-                  Option A: Google Sheets URL
-                </button>
-                <button
-                  type="button"
                   onClick={() => setSourceType("excel")}
                   className={`pb-3 text-sm font-semibold border-b-2 transition-colors flex items-center gap-2 ${
                     sourceType === "excel"
@@ -340,68 +336,28 @@ export function ImportModal({
                   }`}
                 >
                   <Upload className="w-4 h-4" />
-                  Option B: Excel / CSV File Upload
+                  Option A: Excel / CSV File Upload
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSourceType("sheets")}
+                  className={`pb-3 text-sm font-semibold border-b-2 transition-colors flex items-center gap-2 ${
+                    sourceType === "sheets"
+                      ? "border-emerald-600 text-emerald-700"
+                      : "border-transparent text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  Option B: Google Sheets URL
                 </button>
               </div>
 
-              {sourceType === "sheets" ? (
+              {sourceType === "excel" ? (
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <label className="text-xs font-semibold text-slate-700">
-                      Google Sheets Registration URL * <span className="text-red-500">(Required)</span>
+                      Select Excel Workbook (.xlsx, .xls) or CSV
                     </label>
-                    <Input
-                      value={sheetUrl}
-                      onChange={(e) => setSheetUrl(e.target.value)}
-                      placeholder="https://docs.google.com/spreadsheets/d/..."
-                      className="bg-white border-slate-300 font-mono text-xs"
-                    />
-                    <p className="text-[11px] text-slate-500">
-                      URL of the Google Sheet containing player registrations, icons, owners, and team affiliations.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-                      <FolderOpen className="w-3.5 h-3.5 text-slate-500" />
-                      Google Drive Photographs Folder URL <span className="text-slate-400 font-normal">(Optional)</span>
-                    </label>
-                    <Input
-                      value={driveUrl}
-                      onChange={(e) => setDriveUrl(e.target.value)}
-                      placeholder="https://drive.google.com/drive/folders/..."
-                      className="bg-white border-slate-300 font-mono text-xs"
-                    />
-                    <p className="text-[11px] text-slate-500">
-                      Folder containing photo files. Filenames in the sheet will be dynamically matched (case-insensitive, extension-tolerant).
-                    </p>
-                  </div>
-
-                  <div className="flex justify-end pt-2">
-                    <Button
-                      type="button"
-                      onClick={handleParseGoogleSheet}
-                      disabled={loading || !sheetUrl.trim()}
-                      className="bg-slate-900 hover:bg-slate-800 text-white gap-2 font-medium"
-                    >
-                      {loading ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          Reading Google Sheet...
-                        </>
-                      ) : (
-                        <>
-                          Continue to Column Mapping
-                          <ArrowRight className="w-4 h-4" />
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-xs font-semibold text-slate-700">Select Excel Workbook (.xlsx, .xls) or CSV</label>
                     <div className="border-2 border-dashed border-slate-200 hover:border-slate-300 rounded-2xl p-8 text-center bg-slate-50 cursor-pointer">
                       <input
                         type="file"
@@ -414,12 +370,16 @@ export function ImportModal({
                         <Upload className="w-8 h-8 text-slate-400 mx-auto" />
                         <div className="text-xs font-medium text-slate-700">
                           {selectedFile ? (
-                            <span className="font-bold text-emerald-700">{selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)</span>
+                            <span className="font-bold text-emerald-700">
+                              {selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)
+                            </span>
                           ) : (
                             <span>Click to choose or drag & drop .xlsx, .xls, or .csv</span>
                           )}
                         </div>
-                        <p className="text-[11px] text-slate-400">All columns, sheets, and headers will be auto-detected</p>
+                        <p className="text-[11px] text-slate-400">
+                          Supports 1-column (Name only) up to multi-column player spreadsheets
+                        </p>
                       </label>
                     </div>
                   </div>
@@ -429,16 +389,50 @@ export function ImportModal({
                       type="button"
                       onClick={handleParseExcelFile}
                       disabled={!selectedFile || loading}
-                      className="bg-slate-900 hover:bg-slate-800 text-white gap-2 font-medium"
+                      className="bg-slate-900 hover:bg-slate-800 text-white gap-2 font-medium text-xs"
                     >
                       {loading ? (
                         <>
                           <RefreshCw className="w-4 h-4 animate-spin" />
-                          Parsing Workbook...
+                          Parsing File...
                         </>
                       ) : (
                         <>
-                          Continue to Column Mapping
+                          Continue to Preview
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-slate-700">Google Sheets URL</label>
+                    <input
+                      type="url"
+                      value={sheetUrl}
+                      onChange={(e) => setSheetUrl(e.target.value)}
+                      placeholder="https://docs.google.com/spreadsheets/d/..."
+                      className="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-xs text-slate-800 font-mono"
+                    />
+                  </div>
+
+                  <div className="flex justify-end pt-2">
+                    <Button
+                      type="button"
+                      onClick={handleParseGoogleSheet}
+                      disabled={!sheetUrl.trim() || loading}
+                      className="bg-slate-900 hover:bg-slate-800 text-white gap-2 font-medium text-xs"
+                    >
+                      {loading ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          Connecting...
+                        </>
+                      ) : (
+                        <>
+                          Fetch & Preview
                           <ArrowRight className="w-4 h-4" />
                         </>
                       )}
@@ -472,28 +466,60 @@ export function ImportModal({
                 </div>
               )}
 
-              {parsedData.headers.length === 1 && (
-                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
-                  <span className="font-bold">✓ Single-column file detected:</span>
-                  <span>All {parsedData.totalRows} entries will be imported as available auction players.</span>
+              {/* Detected Columns & Data Quality Summary */}
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                      Detected Columns in File ({validationSummary?.detectedColumns.length || 0})
+                    </span>
+                  </div>
+                  <span className="text-xs text-slate-500 font-mono">
+                    Total Rows: <strong>{validationSummary?.validRows || 0} valid</strong>
+                    {validationSummary && validationSummary.invalidRows > 0 && ` (${validationSummary.invalidRows} invalid)`}
+                  </span>
                 </div>
-              )}
 
+                <div className="flex flex-wrap gap-2 text-xs">
+                  {validationSummary?.detectedColumns.map((col, idx) => (
+                    <span
+                      key={idx}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-slate-200 font-medium text-slate-800 shadow-2xs"
+                    >
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                      {col.label}: <strong className="text-slate-900 font-mono">{col.header}</strong>
+                    </span>
+                  ))}
+                  {validationSummary?.detectedColumns.length === 1 && (
+                    <span className="text-xs text-emerald-700 font-semibold self-center ml-2">
+                      (Single-column roster detected — will import names only)
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Duplicate Notice */}
               {validationSummary && validationSummary.duplicates.length > 0 && (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 space-y-1">
+                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 space-y-1">
                   <div className="font-bold flex items-center gap-1.5">
                     <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
                     Duplicate Player Names Detected ({validationSummary.duplicates.length})
                   </div>
                   <p className="text-[11px] text-amber-700">
-                    The following names appear multiple times: {validationSummary.duplicates.slice(0, 5).join(", ")}{validationSummary.duplicates.length > 5 ? ` and ${validationSummary.duplicates.length - 5} more` : ""}.
+                    The following names appear multiple times in the file:{" "}
+                    <strong>{validationSummary.duplicates.slice(0, 5).join(", ")}</strong>
+                    {validationSummary.duplicates.length > 5 && ` and ${validationSummary.duplicates.length - 5} more`}.
                   </p>
                 </div>
               )}
 
+              {/* Append or Replace Mode */}
               {existingPlayerCount > 0 && (
                 <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wide block">Import Target Mode</span>
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wide block">
+                    Import Mode
+                  </span>
                   <div className="flex flex-wrap items-center gap-6 text-xs font-medium">
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
@@ -515,190 +541,125 @@ export function ImportModal({
                         onChange={() => setImportMode("replace")}
                         className="text-red-600"
                       />
-                      <span className="text-red-700 font-semibold">Replace existing {existingPlayerCount} players</span>
+                      <span className="text-red-700 font-semibold">
+                        Replace existing {existingPlayerCount} players
+                      </span>
                     </label>
                   </div>
                 </div>
               )}
 
-              {/* Column Mapping Grid */}
-              <div className="space-y-3">
+              {/* Optional Field Mapping Selectors (Only shown if file has multiple columns) */}
+              {parsedData.headers.length > 1 && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                      <Table className="w-4 h-4 text-slate-500" />
+                      Adjust Column Mappings (Optional)
+                    </h4>
+                    <span className="text-[11px] text-slate-500">
+                      Unmapped fields are left unset
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-semibold text-slate-700">
+                        Player Name * <span className="text-red-500">(Required)</span>
+                      </label>
+                      <select
+                        value={mapping.nameCol}
+                        onChange={(e) => setMapping({ ...mapping, nameCol: e.target.value })}
+                        className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-medium"
+                      >
+                        {parsedData.headers.map((h, i) => (
+                          <option key={i} value={h}>
+                            {h || `Column ${i + 1}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-semibold text-slate-700">
+                        Registration No <span className="text-slate-400">(Optional - Unset if absent)</span>
+                      </label>
+                      <select
+                        value={mapping.regNoCol || ""}
+                        onChange={(e) => setMapping({ ...mapping, regNoCol: e.target.value || undefined })}
+                        className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-medium"
+                      >
+                        <option value="">-- None (Leave unset) --</option>
+                        {parsedData.headers.map((h, i) => (
+                          <option key={i} value={h}>
+                            {h || `Column ${i + 1}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-semibold text-slate-700">
+                        Playing Role <span className="text-slate-400">(Optional - Unset if absent)</span>
+                      </label>
+                      <select
+                        value={mapping.roleCol || ""}
+                        onChange={(e) => setMapping({ ...mapping, roleCol: e.target.value || undefined })}
+                        className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-medium"
+                      >
+                        <option value="">-- None (Unset) --</option>
+                        {parsedData.headers.map((h, i) => (
+                          <option key={i} value={h}>
+                            {h || `Column ${i + 1}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-semibold text-slate-700">
+                        Base Price <span className="text-slate-400">(Optional - Unset if absent)</span>
+                      </label>
+                      <select
+                        value={mapping.priceCol || ""}
+                        onChange={(e) => setMapping({ ...mapping, priceCol: e.target.value || undefined })}
+                        className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-medium"
+                      >
+                        <option value="">-- None (Unset) --</option>
+                        {parsedData.headers.map((h, i) => (
+                          <option key={i} value={h}>
+                            {h || `Column ${i + 1}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* DYNAMIC PREVIEW TABLE: Displays ONLY columns present in the file */}
+              <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                    <Table className="w-4 h-4 text-slate-500" />
-                    Column Field Mapping
+                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                    Dynamic Preview (First 15 Rows)
                   </h4>
                   <span className="text-[11px] text-slate-500">
-                    Detected {parsedData.headers.length} headers in sheet
+                    Displaying only detected file columns
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-slate-700">
-                      Full Name * <span className="text-red-500">(Required)</span>
-                    </label>
-                    <select
-                      value={mapping.nameCol}
-                      onChange={(e) => setMapping({ ...mapping, nameCol: e.target.value })}
-                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
-                    >
-                      <option value="">-- Choose Column --</option>
-                      {parsedData.headers.map((h, i) => (
-                        <option key={i} value={h}>
-                          {h || `Column ${i + 1}`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-slate-700">
-                      Entity Type / Role <span className="text-slate-400">(Player, Icon, Owner)</span>
-                    </label>
-                    <select
-                      value={mapping.typeCol}
-                      onChange={(e) => setMapping({ ...mapping, typeCol: e.target.value })}
-                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
-                    >
-                      <option value="">-- Choose Column (Optional) --</option>
-                      {parsedData.headers.map((h, i) => (
-                        <option key={i} value={h}>
-                          {h || `Column ${i + 1}`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-slate-700">
-                      Team Affiliation <span className="text-slate-400">(Owners & Icons)</span>
-                    </label>
-                    <select
-                      value={mapping.teamCol}
-                      onChange={(e) => setMapping({ ...mapping, teamCol: e.target.value })}
-                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
-                    >
-                      <option value="">-- Choose Column (Optional) --</option>
-                      {parsedData.headers.map((h, i) => (
-                        <option key={i} value={h}>
-                          {h || `Column ${i + 1}`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-slate-700">
-                      Photo Link / Filename
-                    </label>
-                    <select
-                      value={mapping.photoCol}
-                      onChange={(e) => setMapping({ ...mapping, photoCol: e.target.value })}
-                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
-                    >
-                      <option value="">-- Choose Column (Optional) --</option>
-                      {parsedData.headers.map((h, i) => (
-                        <option key={i} value={h}>
-                          {h || `Column ${i + 1}`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-slate-700">Playing Role</label>
-                    <select
-                      value={mapping.roleCol || ""}
-                      onChange={(e) => setMapping({ ...mapping, roleCol: e.target.value })}
-                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
-                    >
-                      <option value="">-- Choose Column (Optional) --</option>
-                      {parsedData.headers.map((h, i) => (
-                        <option key={i} value={h}>
-                          {h || `Column ${i + 1}`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-semibold text-slate-700">Base Price</label>
-                    <select
-                      value={mapping.priceCol || ""}
-                      onChange={(e) => setMapping({ ...mapping, priceCol: e.target.value })}
-                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-medium"
-                    >
-                      <option value="">-- Choose Column (Optional) --</option>
-                      {parsedData.headers.map((h, i) => (
-                        <option key={i} value={h}>
-                          {h || `Column ${i + 1}`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              {/* Data Summary & Quality Badges */}
-              <div className="flex flex-wrap items-center gap-3 p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs">
-                <div className="font-semibold text-slate-700">Detected Records:</div>
-                <Badge variant="outline" className="bg-white text-slate-800 font-semibold gap-1">
-                  <Users className="w-3 h-3 text-blue-600" />
-                  {derivedPlayers.length} Players
-                </Badge>
-                <Badge variant="outline" className="bg-white text-slate-800 font-semibold gap-1">
-                  <Award className="w-3 h-3 text-amber-600" />
-                  {derivedIcons.length} Icon Players
-                </Badge>
-                <Badge variant="outline" className="bg-white text-slate-800 font-semibold gap-1">
-                  <Shield className="w-3 h-3 text-emerald-600" />
-                  {derivedOwners.length} Team Owners
-                </Badge>
-                {validationSummary && validationSummary.teamsDiscovered.length > 0 && (
-                  <Badge variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-300 font-semibold gap-1">
-                    {validationSummary.teamsDiscovered.length} Teams Discovered
-                  </Badge>
-                )}
-
-                {validationSummary && validationSummary.duplicates.length > 0 && (
-                  <Badge variant="destructive" className="gap-1 font-semibold">
-                    <AlertTriangle className="w-3 h-3" />
-                    {validationSummary.duplicates.length} Duplicates Detected
-                  </Badge>
-                )}
-              </div>
-
-              {/* Discovered Teams preview if any */}
-              {validationSummary && validationSummary.teamsDiscovered.length > 0 && (
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-1">
-                  <div className="font-semibold text-slate-700">Discovered Franchises from Affiliation:</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {validationSummary.teamsDiscovered.map((teamName, idx) => (
-                      <span key={idx} className="bg-white border border-slate-200 px-2 py-0.5 rounded text-[11px] font-medium text-slate-800">
-                        {teamName}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Live Preview Table */}
-              <div className="space-y-2">
-                <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                  Data Preview (First 15 Rows)
-                </h4>
                 <div className="border border-slate-200 rounded-xl overflow-hidden max-h-56 overflow-y-auto">
                   <table className="w-full text-left text-xs">
                     <thead className="bg-slate-100 border-b border-slate-200 text-slate-700 font-semibold sticky top-0">
                       <tr>
-                        <th className="p-2.5">#</th>
-                        <th className="p-2.5">Name</th>
-                        <th className="p-2.5">Detected Type</th>
-                        <th className="p-2.5">Team Affiliation</th>
-                        <th className="p-2.5">Photo Link / File</th>
-                        <th className="p-2.5">Playing Role</th>
-                        <th className="p-2.5">Base Price</th>
+                        <th className="p-2.5 w-12">#</th>
+                        <th className="p-2.5">Player Name</th>
+                        {showRegNoCol && <th className="p-2.5">Registration No</th>}
+                        {showRoleCol && <th className="p-2.5">Playing Role</th>}
+                        {showPriceCol && <th className="p-2.5">Base Price</th>}
+                        {showAgeCol && <th className="p-2.5">Age</th>}
+                        {showTeamCol && <th className="p-2.5">Team</th>}
+                        {showPhotoCol && <th className="p-2.5">Photo</th>}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
@@ -716,32 +677,38 @@ export function ImportModal({
                                 </span>
                               )}
                             </td>
-                            <td className="p-2.5">
-                              <Badge
-                                variant="outline"
-                                className={`text-[10px] font-bold ${
-                                  rec.type === "OWNER"
-                                    ? "bg-purple-50 text-purple-700 border-purple-200"
-                                    : rec.type === "ICON"
-                                    ? "bg-amber-50 text-amber-700 border-amber-200"
-                                    : "bg-blue-50 text-blue-700 border-blue-200"
-                                }`}
-                              >
-                                {rec.type}
-                              </Badge>
-                            </td>
-                            <td className="p-2.5 text-slate-700 font-medium">
-                              {rec.teamAffiliation || <span className="text-slate-400 italic">None</span>}
-                            </td>
-                            <td className="p-2.5 text-slate-600 truncate max-w-[150px] font-mono text-[11px]">
-                              {rec.photoRef || <span className="text-slate-300 italic">None</span>}
-                            </td>
-                            <td className="p-2.5 text-slate-600 font-medium">
-                              {rec.role || "ALL_ROUNDER"}
-                            </td>
-                            <td className="p-2.5 font-mono text-slate-700">
-                              {rec.type === "ICON" ? "₹2,00,000" : (rec.basePrice ? `₹${rec.basePrice.toLocaleString("en-IN")}` : "₹25,000")}
-                            </td>
+                            {showRegNoCol && (
+                              <td className="p-2.5 font-mono text-slate-700 text-[11px]">
+                                {rec.registrationNo}
+                              </td>
+                            )}
+                            {showRoleCol && (
+                              <td className="p-2.5 text-slate-700 font-medium">
+                                <span className="inline-block px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-semibold">
+                                  {rec.role || "—"}
+                                </span>
+                              </td>
+                            )}
+                            {showPriceCol && (
+                              <td className="p-2.5 font-mono text-slate-800 font-semibold">
+                                {rec.basePrice != null && rec.basePrice > 0 ? `₹${rec.basePrice.toLocaleString("en-IN")}` : "—"}
+                              </td>
+                            )}
+                            {showAgeCol && (
+                              <td className="p-2.5 text-slate-600 font-mono">
+                                {rec.age || "—"}
+                              </td>
+                            )}
+                            {showTeamCol && (
+                              <td className="p-2.5 text-slate-700">
+                                {rec.teamAffiliation || "—"}
+                              </td>
+                            )}
+                            {showPhotoCol && (
+                              <td className="p-2.5 font-mono text-slate-500 truncate max-w-[120px]">
+                                {rec.photoUrl || "—"}
+                              </td>
+                            )}
                           </tr>
                         );
                       })}
@@ -749,50 +716,58 @@ export function ImportModal({
                   </table>
                 </div>
               </div>
-
-              {/* Action Buttons */}
-              <div className="flex items-center justify-between pt-4 border-t border-slate-200">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setStep(1)}
-                  disabled={loading}
-                  className="border-slate-300 text-slate-700 hover:bg-slate-50"
-                >
-                  Back to Source
-                </Button>
-
-                <div className="flex items-center gap-3">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={onClose}
-                    disabled={loading}
-                    className="border-slate-300 text-slate-700 hover:bg-slate-50"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={handleConfirmImport}
-                    disabled={loading || derivedPlayers.length === 0}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-5 gap-2"
-                  >
-                    {loading ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        Importing & Syncing Data...
-                      </>
-                    ) : (
-                      `Import ${derivedPlayers.length} Players & Rosters`
-                    )}
-                  </Button>
-                </div>
-              </div>
             </div>
           )}
+        </div>
+
+        <div className="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+          {step === 2 ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setStep(1)}
+              className="border-slate-300 text-slate-700 text-xs font-semibold"
+            >
+              Back to Source
+            </Button>
+          ) : (
+            <div />
+          )}
+
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onClose}
+              className="border-slate-300 text-slate-700 text-xs font-semibold"
+            >
+              Cancel
+            </Button>
+
+            {step === 2 && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleConfirmImport}
+                disabled={loading || !validationSummary || validationSummary.validRows === 0}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs gap-1.5 shadow-sm"
+              >
+                {loading ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    Importing...
+                  </>
+                ) : (
+                  <>
+                    Confirm & Import {validationSummary?.validRows || 0} Players
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </>
+                )}
+              </Button>
+            )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>

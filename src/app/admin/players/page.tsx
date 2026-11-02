@@ -85,7 +85,7 @@ export default function AdminPlayersPage() {
   const filteredPlayers = players.filter((p) => {
     return (
       p.fullName.toLowerCase().includes(search.toLowerCase()) ||
-      p.registrationNo.toLowerCase().includes(search.toLowerCase())
+      Boolean(p.registrationNo && p.registrationNo.toLowerCase().includes(search.toLowerCase()))
     );
   });
 
@@ -234,8 +234,8 @@ export default function AdminPlayersPage() {
   const openEditModal = (player: Player) => {
     setEditingPlayer(player);
     setEditFullName(player.fullName);
-    setEditRegNo(player.registrationNo);
-    setEditRole(player.primaryRole);
+    setEditRegNo(player.registrationNo || "");
+    setEditRole((player.primaryRole as PlayerRole) || "ALL_ROUNDER");
     setEditBasePrice(player.basePriceOverride || player.basePrice || 2000);
     setEditPhotoUrl(player.photoUrl || "");
   };

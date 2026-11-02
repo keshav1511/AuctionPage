@@ -251,7 +251,7 @@ export async function POST(req: NextRequest) {
     // 8. Update Auction State with First Player
     if (auctionState && newPlayers.length > 0) {
       auctionState.currentPlayerId = newPlayers[0].id;
-      auctionState.currentHighestBid = newPlayers[0].basePrice;
+      auctionState.currentHighestBid = newPlayers[0].basePrice || 0;
       auctionState.currentLeadingTeamId = null;
       auctionState.status = "IDLE";
       auctionState.round = 1;

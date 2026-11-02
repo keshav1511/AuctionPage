@@ -20,32 +20,31 @@ export function LiveTeamDashboard({
   session,
   rules,
 }: LiveTeamDashboardProps) {
-  // Ensure we sort/display teams reliably (by ID or original order)
   const sortedTeams = useMemo(() => {
     return [...teams];
   }, [teams]);
 
   return (
-    <section className="w-full mt-6 select-none">
-      <div className="flex items-center justify-between mb-4">
+    <section className="w-full mt-4 sm:mt-5 select-none">
+      <div className="flex items-center justify-between mb-2.5 sm:mb-3">
         <div>
-          <h3 className="text-lg sm:text-xl font-black text-white uppercase tracking-wider flex items-center gap-2.5">
-            <Users className="w-5 h-5 text-emerald-400" />
+          <h3 className="text-sm sm:text-base font-black text-white uppercase tracking-wider flex items-center gap-2">
+            <Users className="w-4 h-4 text-emerald-400" />
             Live Team Dashboard
           </h3>
-          <p className="text-xs text-slate-400">
+          <p className="text-[11px] text-slate-400">
             Real-time franchise purse, participant quotas, and acquired auction squads
           </p>
         </div>
         <div className="hidden sm:flex items-center gap-2">
-          <span className="px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-400">
+          <span className="px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-[10px] font-mono text-slate-400">
             {teams.length} Franchises Active
           </span>
         </div>
       </div>
 
-      {/* Responsive Four Team Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-5 items-stretch">
+      {/* Responsive Four Team Cards Grid: 4 cols on lg, 2 cols on sm, 1 col on mobile */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-3.5 lg:gap-4 items-stretch">
         {sortedTeams.map((team) => {
           // 1. Acquired players for this franchise
           const teamSoldPlayers = players.filter(
@@ -70,8 +69,8 @@ export function LiveTeamDashboard({
           const currentBidAmount = session.currentHighestBid || 0;
 
           // 5. Squad composition & capacity
-          const minSquad = team.purse?.minPlayers || rules.minimumSquadSize || 10;
-          const maxSquad = team.purse?.maxPlayers || rules.maximumSquadSize || 12;
+          const minSquad = team.purse?.minPlayers || rules.minimumSquadSize || 8;
+          const maxSquad = team.purse?.maxPlayers || rules.maximumSquadSize || 8;
           const additionalRequired = Math.max(0, minSquad - counts.totalParticipants);
           const remainingCapacity = Math.max(0, maxSquad - counts.totalParticipants);
           const isMinSquadMet = counts.totalParticipants >= minSquad;
@@ -85,25 +84,25 @@ export function LiveTeamDashboard({
           return (
             <div
               key={team.id}
-              className={`rounded-2xl border transition-all duration-300 flex flex-col justify-between overflow-hidden relative backdrop-blur-md ${
+              className={`rounded-xl border transition-all duration-200 flex flex-col justify-between overflow-hidden relative backdrop-blur-md ${
                 isLeading
-                  ? "ring-2 ring-amber-400 border-amber-400/90 bg-gradient-to-b from-amber-950/40 via-charcoal-900/95 to-charcoal-950 shadow-[0_0_30px_rgba(245,158,11,0.3)] scale-[1.01]"
-                  : "border-slate-800 bg-charcoal-900/90 hover:border-slate-700 shadow-xl"
+                  ? "ring-2 ring-amber-400 border-amber-400/90 bg-gradient-to-b from-amber-950/40 via-charcoal-900/95 to-charcoal-950 shadow-[0_0_20px_rgba(245,158,11,0.25)]"
+                  : "border-slate-800 bg-charcoal-900/90 hover:border-slate-700 shadow-md"
               }`}
             >
               {/* Top Accent Strip */}
               <div
-                className="h-1.5 w-full"
+                className="h-1 w-full shrink-0"
                 style={{ backgroundColor: team.primaryColor || "#059669" }}
               />
 
-              <div className="p-4 sm:p-5 flex-1 flex flex-col gap-4">
+              <div className="p-3 sm:p-3.5 flex-1 flex flex-col gap-2.5 sm:gap-3">
                 {/* 1. Team Identity Header */}
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
                     {/* Team Logo */}
                     {team.logoUrl ? (
-                      <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-slate-950/80 border border-slate-700/80 p-1 shrink-0 shadow-md">
+                      <div className="relative w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden bg-slate-950/80 border border-slate-700/80 p-0.5 shrink-0 shadow-xs">
                         <img
                           src={team.logoUrl}
                           alt={team.name}
@@ -112,7 +111,7 @@ export function LiveTeamDashboard({
                       </div>
                     ) : (
                       <div
-                        className="w-11 h-11 rounded-xl flex items-center justify-center font-black text-white text-sm shadow-md shrink-0 border border-white/20"
+                        className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center font-black text-white text-xs shadow-xs shrink-0 border border-white/20"
                         style={{ backgroundColor: team.primaryColor || "#059669" }}
                       >
                         {team.shortCode || team.name.substring(0, 3).toUpperCase()}
@@ -120,13 +119,13 @@ export function LiveTeamDashboard({
                     )}
 
                     <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-mono text-[10px] font-bold px-1.5 py-0.2 rounded bg-slate-800 text-amber-300 border border-slate-700">
+                      <div className="flex items-center gap-1">
+                        <span className="font-mono text-[9px] font-bold px-1 rounded bg-slate-800 text-amber-300 border border-slate-700">
                           {team.shortCode}
                         </span>
                       </div>
                       <h4
-                        className="font-black text-white text-base truncate leading-tight mt-1"
+                        className="font-black text-white text-xs sm:text-sm truncate leading-tight mt-0.5"
                         title={team.name}
                       >
                         {team.name}
@@ -136,20 +135,20 @@ export function LiveTeamDashboard({
 
                   {/* Leading Bid Badge */}
                   {isLeading ? (
-                    <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500/20 border border-amber-400 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.5)] animate-pulse shrink-0">
-                      <Sparkles className="w-3 h-3 text-amber-400" />
-                      <span className="text-[9px] font-black uppercase tracking-wider">
-                        HIGHEST BID
+                    <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400 text-amber-300 animate-pulse shrink-0">
+                      <Sparkles className="w-2.5 h-2.5 text-amber-400" />
+                      <span className="text-[8px] font-black uppercase tracking-wider">
+                        LEADING
                       </span>
                     </div>
                   ) : null}
                 </div>
 
                 {/* 2. Owner & Icon Representatives */}
-                <div className="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-charcoal-950/80 border border-slate-800/80 text-xs">
+                <div className="grid grid-cols-2 gap-1.5 p-1.5 rounded-lg bg-charcoal-950/80 border border-slate-800/80 text-[11px]">
                   {/* Owner */}
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className="relative w-8 h-8 rounded-full overflow-hidden bg-slate-800 border-2 border-amber-500/50 shrink-0 flex items-center justify-center shadow-xs">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <div className="relative w-6 h-6 rounded-full overflow-hidden bg-slate-800 border border-amber-500/50 shrink-0 flex items-center justify-center">
                       {team.ownerPhotoUrl ? (
                         <img
                           src={team.ownerPhotoUrl}
@@ -157,17 +156,17 @@ export function LiveTeamDashboard({
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        <span className="font-bold text-[10px] text-amber-300">
+                        <span className="font-bold text-[8px] text-amber-300">
                           {(team.ownerName || "OW").substring(0, 2).toUpperCase()}
                         </span>
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <span className="block text-[8px] font-bold text-amber-400/90 uppercase tracking-wider">
+                      <span className="block text-[7px] font-bold text-amber-400/90 uppercase tracking-wider">
                         Owner
                       </span>
                       <span
-                        className="block text-xs font-semibold text-white truncate"
+                        className="block text-[10px] font-semibold text-white truncate"
                         title={team.ownerName || "TBD"}
                       >
                         {team.ownerName || "TBD"}
@@ -176,8 +175,8 @@ export function LiveTeamDashboard({
                   </div>
 
                   {/* Icon / Representative */}
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className="relative w-8 h-8 rounded-full overflow-hidden bg-slate-800 border-2 border-emerald-500/50 shrink-0 flex items-center justify-center shadow-xs">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <div className="relative w-6 h-6 rounded-full overflow-hidden bg-slate-800 border border-emerald-500/50 shrink-0 flex items-center justify-center">
                       {team.iconPlayerPhotoUrl ? (
                         <img
                           src={team.iconPlayerPhotoUrl}
@@ -185,17 +184,17 @@ export function LiveTeamDashboard({
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        <span className="font-bold text-[10px] text-emerald-300">
+                        <span className="font-bold text-[8px] text-emerald-300">
                           {(team.iconPlayerName || "IC").substring(0, 2).toUpperCase()}
                         </span>
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <span className="block text-[8px] font-bold text-emerald-400/90 uppercase tracking-wider">
+                      <span className="block text-[7px] font-bold text-emerald-400/90 uppercase tracking-wider">
                         Icon / Rep
                       </span>
                       <span
-                        className="block text-xs font-semibold text-white truncate"
+                        className="block text-[10px] font-semibold text-white truncate"
                         title={team.iconPlayerName || "TBD"}
                       >
                         {team.iconPlayerName || "TBD"}
@@ -205,117 +204,99 @@ export function LiveTeamDashboard({
                 </div>
 
                 {/* 3. Financial Section */}
-                <div className="space-y-2 p-3 rounded-xl bg-charcoal-950/70 border border-slate-800/80">
+                <div className="space-y-1.5 p-2 sm:p-2.5 rounded-lg bg-charcoal-950/70 border border-slate-800/80">
                   <div className="flex items-baseline justify-between">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      Remaining Purse
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">
+                      Purse Left
                     </span>
-                    <span className="font-mono text-lg font-black text-emerald-400">
-                      {formatCurrency(remainingPurse)}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs text-slate-400">
-                    <span>Spent on Squad:</span>
-                    <span className="font-mono font-bold text-slate-200">
-                      {formatCurrency(spentAmount)}
+                    <span className="font-mono text-sm sm:text-base font-black text-emerald-400">
+                      {formatCurrency(remainingPurse, true)}
                     </span>
                   </div>
 
-                  <div className="flex items-center justify-between text-xs text-slate-400">
-                    <span>Total Purse:</span>
+                  <div className="flex items-center justify-between text-[10px] text-slate-400">
+                    <span>Spent / Total:</span>
                     <span className="font-mono text-slate-300">
-                      {formatCurrency(totalPurse)}
+                      {formatCurrency(spentAmount, true)} / {formatCurrency(totalPurse, true)}
                     </span>
                   </div>
 
                   {/* Active Bid Commitment (if leading) */}
                   {isLeading && (
-                    <div className="pt-2 border-t border-amber-500/30 flex items-center justify-between text-xs">
+                    <div className="pt-1 border-t border-amber-500/30 flex items-center justify-between text-[10px]">
                       <span className="text-amber-400 font-bold flex items-center gap-1">
-                        <TrendingUp className="w-3.5 h-3.5" /> Active Bid:
+                        <TrendingUp className="w-3 h-3" /> Bid:
                       </span>
-                      <div className="text-right">
-                        <span className="font-mono font-black text-amber-300 text-sm">
-                          {formatCurrency(currentBidAmount)}
-                        </span>
-                        <span className="block text-[9px] text-amber-400/70">
-                          (Pending hammer • not yet deducted)
-                        </span>
-                      </div>
+                      <span className="font-mono font-black text-amber-300">
+                        {formatCurrency(currentBidAmount)}
+                      </span>
                     </div>
                   )}
 
                   <Progress
                     value={spentPercentage}
-                    className="h-1.5 bg-slate-800"
+                    className="h-1 bg-slate-800"
                     indicatorClassName={isLeading ? "bg-amber-400" : "bg-emerald-500"}
                   />
                 </div>
 
                 {/* 4. Squad Composition & Requirements */}
-                <div className="space-y-1.5 p-3 rounded-xl bg-charcoal-950/60 border border-slate-800/80 text-xs">
+                <div className="space-y-1 p-2 rounded-lg bg-charcoal-950/60 border border-slate-800/80 text-[10px]">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-slate-300">Total Squad:</span>
-                    <span className="font-mono font-black text-white text-sm">
+                    <span className="font-mono font-black text-white">
                       {counts.totalParticipants} / {maxSquad}{" "}
-                      <span className="text-[10px] font-normal text-slate-400 font-sans">
+                      <span className="font-normal text-slate-400 font-sans text-[9px]">
                         Participants
                       </span>
                     </span>
                   </div>
 
-                  <p className="text-[10px] text-slate-400">
-                    {counts.registeredPlayersCount} Reg + {counts.ownerCount} Owner + {counts.iconCount} Icon
-                  </p>
+                  <div className="flex items-center justify-between text-[9px] text-slate-400">
+                    <span>{counts.registeredPlayersCount} Reg + {counts.ownerCount} Owner + {counts.iconCount} Icon</span>
+                    <span className="font-mono text-slate-300">
+                      {isMaxSquadReached ? "Full" : `${remainingCapacity} slot${remainingCapacity === 1 ? "" : "s"}`}
+                    </span>
+                  </div>
 
-                  <div className="pt-1.5 border-t border-slate-800/80 flex items-center justify-between">
+                  <div className="pt-1 border-t border-slate-800/80 flex items-center justify-between">
                     {isMinSquadMet ? (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-md">
-                        <CheckCircle2 className="w-3 h-3" /> Minimum Met ({minSquad})
+                      <span className="inline-flex items-center gap-1 text-[8px] font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-1.5 py-0.2 rounded">
+                        <CheckCircle2 className="w-2.5 h-2.5" /> Min Met ({minSquad})
                       </span>
                     ) : (
-                      <span className="text-[10px] font-semibold text-amber-400 bg-amber-950/60 border border-amber-800/60 px-2 py-0.5 rounded-md">
-                        Needs {additionalRequired} more for min ({counts.totalParticipants}/{minSquad})
+                      <span className="text-[8px] font-semibold text-amber-400 bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.2 rounded">
+                        Needs {additionalRequired} more ({counts.totalParticipants}/{minSquad})
                       </span>
                     )}
-
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      {isMaxSquadReached
-                        ? "Squad Full"
-                        : `${remainingCapacity} slot${remainingCapacity === 1 ? "" : "s"} open`}
-                    </span>
                   </div>
                 </div>
 
                 {/* 5. Purchased Player Stack */}
-                <div className="pt-2 border-t border-slate-800/80">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
-                      <Users className="w-3.5 h-3.5 text-slate-400" />
-                      Purchased Squad ({teamSoldPlayers.length})
+                <div className="pt-1.5 border-t border-slate-800/80">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-black text-white uppercase tracking-wider flex items-center gap-1">
+                      <Users className="w-3 h-3 text-slate-400" />
+                      Signings ({teamSoldPlayers.length})
                     </span>
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      {teamSoldPlayers.length} / {Math.max(0, maxSquad - (counts.ownerCount + counts.iconCount))} max
+                    <span className="text-[9px] text-slate-400 font-mono">
+                      {teamSoldPlayers.length}/{Math.max(0, maxSquad - (counts.ownerCount + counts.iconCount))}
                     </span>
                   </div>
 
                   {teamSoldPlayers.length === 0 ? (
-                    <div className="py-4 px-3 rounded-xl bg-charcoal-950/40 border border-dashed border-slate-800 text-center">
-                      <p className="text-xs text-slate-500 font-medium">No players acquired yet</p>
-                      <span className="text-[9px] text-slate-600 block mt-0.5">
-                        Purchases will appear here automatically
-                      </span>
+                    <div className="py-2.5 px-2 rounded-lg bg-charcoal-950/40 border border-dashed border-slate-800 text-center">
+                      <p className="text-[10px] text-slate-500 font-medium">No players acquired yet</p>
                     </div>
                   ) : (
-                    <div className="space-y-1.5 max-h-[180px] overflow-y-auto pr-1">
+                    <div className="space-y-1 max-h-[85px] overflow-y-auto pr-1 scrollbar-thin">
                       {teamSoldPlayers.map((player) => (
                         <div
                           key={player.id}
-                          className="flex items-center justify-between p-2 rounded-lg bg-charcoal-950/80 border border-slate-800/80 hover:border-slate-700 transition-colors"
+                          className="flex items-center justify-between p-1.5 rounded-md bg-charcoal-950/80 border border-slate-800/80 hover:border-slate-700 transition-colors"
                         >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <div className="relative w-7 h-7 rounded-full overflow-hidden bg-slate-800 border border-slate-700 shrink-0 flex items-center justify-center">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <div className="relative w-5 h-5 rounded-full overflow-hidden bg-slate-800 border border-slate-700 shrink-0 flex items-center justify-center">
                               {player.photoUrl ? (
                                 <img
                                   src={player.photoUrl}
@@ -323,20 +304,20 @@ export function LiveTeamDashboard({
                                   className="w-full h-full object-cover"
                                 />
                               ) : (
-                                <span className="font-bold text-[9px] text-emerald-400">
+                                <span className="font-bold text-[7px] text-emerald-400">
                                   {player.fullName.substring(0, 2).toUpperCase()}
                                 </span>
                               )}
                             </div>
                             <div className="min-w-0">
                               <h5
-                                className="font-bold text-xs text-white truncate max-w-[100px] sm:max-w-[120px]"
+                                className="font-bold text-[10px] text-white truncate max-w-[85px] sm:max-w-[100px]"
                                 title={player.fullName}
                               >
                                 {player.fullName}
                               </h5>
                               <span
-                                className={`text-[9px] font-semibold px-1 rounded inline-block ${getRoleBadgeColor(
+                                className={`text-[8px] font-semibold px-0.5 rounded inline-block ${getRoleBadgeColor(
                                   player.primaryRole
                                 )}`}
                               >
@@ -344,8 +325,8 @@ export function LiveTeamDashboard({
                               </span>
                             </div>
                           </div>
-                          <span className="font-mono text-xs font-bold text-emerald-400 shrink-0">
-                            {formatCurrency(player.soldPrice || player.basePrice)}
+                          <span className="font-mono text-[10px] font-bold text-emerald-400 shrink-0">
+                            {formatCurrency(player.soldPrice || player.basePrice, true)}
                           </span>
                         </div>
                       ))}

@@ -41,6 +41,8 @@ export default function AuctionControlDesk() {
     players: livePlayers,
     rules: liveRules,
     isConnected,
+    connectionStatus,
+    currentRevision,
     remainingSeconds,
     lastActionMessage,
     placeBid,
@@ -54,16 +56,25 @@ export default function AuctionControlDesk() {
     refreshState,
   } = useRealtimeAuction(activeLeague.id);
 
-  const [activePlayerIndex, setActivePlayerIndex] = useState(0);
   const [localNotice, setLocalNotice] = useState<string | null>(null);
 
   const actionNotice = lastActionMessage || localNotice;
   const isPaused = session.status === "PAUSED";
 
-  const currentPlayer: Player | null = useMemo(
-    () => session.currentPlayer || livePlayers[activePlayerIndex] || null,
-    [session.currentPlayer, livePlayers, activePlayerIndex]
-  );
+  const currentPlayer: Player | null = useMemo(() => {
+    if (session.currentPlayer) return session.currentPlayer;
+    if (session.currentPlayerId) {
+      return (
+        livePlayers.find(
+          (p) =>
+            p.id === session.currentPlayerId ||
+            p.registrationNo === session.currentPlayerId ||
+            p.fullName === session.currentPlayerId
+        ) || null
+      );
+    }
+    return null;
+  }, [session.currentPlayer, session.currentPlayerId, livePlayers]);
 
   const basePriceForPlayer = currentPlayer
     ? (currentPlayer.basePriceOverride || currentPlayer.basePrice || liveRules.basePrice || 2000)
@@ -213,11 +224,17 @@ export default function AuctionControlDesk() {
         setTimeout(() => setLocalNotice(null), 3000);
       }
     } else {
-      if (activePlayerIndex < livePlayers.length - 1) {
-        const nextIdx = activePlayerIndex + 1;
+      const currentIdx = currentPlayer
+        ? livePlayers.findIndex((p) => p.id === currentPlayer.id)
+        : -1;
+      const nextIdx = currentIdx + 1;
+      if (nextIdx < livePlayers.length) {
         const nextP = livePlayers[nextIdx];
-        setActivePlayerIndex(nextIdx);
-        await selectLot(nextP.id);
+        const res = await selectLot(nextP.id);
+        if (!res.success) {
+          setLocalNotice(res.error || "Failed to spotlight next player");
+          setTimeout(() => setLocalNotice(null), 3000);
+        }
       } else {
         setLocalNotice("End of player roster reached!");
         setTimeout(() => setLocalNotice(null), 3000);
@@ -265,9 +282,9 @@ export default function AuctionControlDesk() {
           action={
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold bg-white border-slate-200">
-                <Radio className={`w-3 h-3 ${isConnected ? "text-emerald-500 animate-pulse" : "text-amber-500"}`} />
-                <span className={isConnected ? "text-emerald-700" : "text-amber-700"}>
-                  {isConnected ? "Live Synchronized" : "Connecting..."}
+                <Radio className={`w-3 h-3 ${connectionStatus === "connected" ? "text-emerald-500 animate-pulse" : "text-amber-500"}`} />
+                <span className={connectionStatus === "connected" ? "text-emerald-700" : "text-amber-700"}>
+                  {connectionStatus === "connected" ? `Live Synchronized (r${currentRevision})` : connectionStatus === "reconnecting" ? "Reconnecting..." : "Connection Unavailable"}
                 </span>
               </div>
               <Button

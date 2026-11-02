@@ -48,3 +48,6 @@ next-env.d.ts
 # excel test files
 *.xlsx
 
+# scratch & test files
+scratch/
+

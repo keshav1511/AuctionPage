@@ -31,7 +31,7 @@ import {
   AuditLogEntry,
 } from "./tab-definitions";
 import { initializeLeagueWorkbook } from "./workbook-manager";
-import { League, Team, Player, AuctionRules, Bid } from "@/types";
+import { League, Team, Player, AuctionRules, Bid, TournamentSummary } from "@/types";
 import { DEFAULT_LEAGUE, DEFAULT_AUCTION_RULES } from "@/config/default-config";
 import { getInitialLeagueById } from "@/lib/mock-data/leagues";
 import { callAppsScript, isAppsScriptConfigured } from "./apps-script-client";
@@ -70,6 +70,16 @@ export function invalidateLeagueCache(leagueId: string): void {
   playersCache.delete(leagueId);
   configCache.delete(leagueId);
   recentBidsCache.delete(leagueId);
+}
+
+let designatedActiveTournamentId: string | null = process.env.ACTIVE_TOURNAMENT_ID || null;
+
+export function getDesignatedActiveTournamentId(): string | null {
+  return designatedActiveTournamentId;
+}
+
+export function setDesignatedActiveTournamentId(tournamentId: string | null): void {
+  designatedActiveTournamentId = tournamentId;
 }
 
 // In-flight request coalescing to prevent thundering herd on concurrent spectator requests
@@ -241,59 +251,149 @@ export function getLastPersistenceError(): string | null {
   return lastAppsScriptSyncError;
 }
 
+// In-flight coalescing map specifically for Apps Script full syncs
+const appsScriptSyncInFlight = new Map<string, Promise<boolean>>();
+
 /**
  * Synchronizes complete state from Google Apps Script Web App in a single network request
+ * Coalesces concurrent calls so Promise.all across entities shares exactly one HTTP request
  */
 async function syncFromAppsScript(leagueId: string): Promise<boolean> {
   if (!isAppsScriptConfigured()) return false;
-  try {
-    const data = await callAppsScript<{
-      config?: { league: League; rules: AuctionRules };
-      state?: AuctionStateRow;
-      teams?: Team[];
-      players?: Player[];
-      recentBids?: Bid[];
-    }>("GET_ALL_DATA");
-
-    if (data) {
-      lastAppsScriptSyncError = null;
-      const mirror = getOrCreateMemoryMirror(leagueId);
-      if (data.config && data.config.league) {
-        mirror.league = { ...mirror.league, ...data.config.league };
-        if (data.config.rules) mirror.rules = { ...mirror.rules, ...data.config.rules };
-        configCache.set(leagueId, {
-          data: { league: mirror.league, rules: mirror.rules },
-          expiresAt: Date.now() + CACHE_TTL_MS,
-        });
-      }
-      if (Array.isArray(data.teams)) {
-        mirror.teams = data.teams;
-        teamsCache.set(leagueId, { data: data.teams, expiresAt: Date.now() + CACHE_TTL_MS });
-      }
-      if (Array.isArray(data.players)) {
-        mirror.players = data.players;
-        playersCache.set(leagueId, { data: data.players, expiresAt: Date.now() + CACHE_TTL_MS });
-      }
-      if (data.state && data.state.id) {
-        mirror.state = data.state;
-        stateCache.set(leagueId, { data: data.state, expiresAt: Date.now() + CACHE_TTL_MS });
-      }
-      if (Array.isArray(data.recentBids)) {
-        mirror.bids = data.recentBids;
-        recentBidsCache.set(leagueId, { data: data.recentBids, expiresAt: Date.now() + CACHE_TTL_MS });
-      }
-      return true;
-    }
-  } catch (err) {
-    lastAppsScriptSyncError = (err as Error).message || String(err);
-    console.warn("[SheetsRepository] Apps Script sync warning:", err);
+  if (appsScriptSyncInFlight.has(leagueId)) {
+    return appsScriptSyncInFlight.get(leagueId)!;
   }
-  return false;
+
+  const syncPromise = (async () => {
+    try {
+      const data = await callAppsScript<{
+        config?: { league: League; rules: AuctionRules };
+        state?: AuctionStateRow;
+        teams?: Team[];
+        players?: Player[];
+        recentBids?: Bid[];
+        tournaments?: League[];
+      }>("GET_ALL_DATA", { leagueId });
+
+      if (data) {
+        lastAppsScriptSyncError = null;
+        const mirror = getOrCreateMemoryMirror(leagueId);
+
+        if (Array.isArray(data.tournaments) && data.tournaments.length > 0) {
+          for (const tourney of data.tournaments) {
+            const tourneyMirror = getOrCreateMemoryMirror(tourney.id);
+            tourneyMirror.league = { ...tourneyMirror.league, ...tourney };
+          }
+        }
+
+        if (data.config && data.config.league) {
+          mirror.league = { ...mirror.league, ...data.config.league };
+          if (data.config.rules) mirror.rules = { ...mirror.rules, ...data.config.rules };
+          configCache.set(leagueId, {
+            data: { league: mirror.league, rules: mirror.rules },
+            expiresAt: Date.now() + CACHE_TTL_MS,
+          });
+        }
+        if (Array.isArray(data.teams)) {
+          mirror.teams = data.teams;
+          teamsCache.set(leagueId, { data: data.teams, expiresAt: Date.now() + CACHE_TTL_MS });
+        }
+        if (Array.isArray(data.players)) {
+          mirror.players = data.players;
+          playersCache.set(leagueId, { data: data.players, expiresAt: Date.now() + CACHE_TTL_MS });
+        }
+        if (data.state && data.state.id) {
+          mirror.state = data.state;
+          stateCache.set(leagueId, { data: data.state, expiresAt: Date.now() + CACHE_TTL_MS });
+        }
+        if (Array.isArray(data.recentBids)) {
+          mirror.bids = data.recentBids;
+          recentBidsCache.set(leagueId, { data: data.recentBids, expiresAt: Date.now() + CACHE_TTL_MS });
+        }
+        return true;
+      }
+    } catch (err) {
+      lastAppsScriptSyncError = (err as Error).message || String(err);
+      console.warn("[SheetsRepository] Apps Script sync warning:", err);
+    } finally {
+      appsScriptSyncInFlight.delete(leagueId);
+    }
+    return false;
+  })();
+
+  appsScriptSyncInFlight.set(leagueId, syncPromise);
+  return syncPromise;
 }
 
 // ==============================================================================
 // REPOSITORY METHODS
 // ==============================================================================
+
+/**
+ * Retrieves summaries for all available tournaments (for tournament selection & multi-tournament management)
+ */
+export async function getAllTournamentsFromSheets(): Promise<TournamentSummary[]> {
+  if (isAppsScriptConfigured()) {
+    try {
+      const data = await callAppsScript<{
+        tournaments?: League[];
+        config?: { league: League; rules: AuctionRules };
+        state?: AuctionStateRow;
+        teams?: Team[];
+        players?: Player[];
+      }>("GET_ALL_DATA");
+
+      if (data && Array.isArray(data.tournaments) && data.tournaments.length > 0) {
+        for (const tourney of data.tournaments) {
+          const m = getOrCreateMemoryMirror(tourney.id);
+          m.league = { ...m.league, ...tourney };
+        }
+      }
+    } catch (err) {
+      console.warn("[SheetsRepository] getAllTournamentsFromSheets Apps Script sync warning:", err);
+    }
+  }
+
+  // Ensure default tournament exists in memory mirror
+  getOrCreateMemoryMirror("league-main");
+
+  const results: TournamentSummary[] = [];
+
+  for (const [id, mirror] of memoryMirrors.entries()) {
+    const totalPurse = mirror.rules?.totalPurse || 100000;
+    const minSquad = mirror.rules?.minimumSquadSize || 8;
+    const maxSquad = mirror.rules?.maximumSquadSize || 8;
+    const basePrice = mirror.rules?.basePrice || 2000;
+    const isMain = id === "league-main" || id === "ntl-season-1";
+
+    results.push({
+      id,
+      name: mirror.league.name || (isMain ? "Nalanda Turf League – Season 1" : `Tournament (${id})`),
+      season: mirror.league.edition || (isMain ? "Season 1" : "Season"),
+      edition: mirror.league.edition || (isMain ? "Season 1" : "Season"),
+      description: mirror.league.description || "",
+      logoUrl: mirror.league.logoUrl || "",
+      status: mirror.state?.status || "IDLE",
+      teamsCount: mirror.teams?.length || 0,
+      playersCount: mirror.players?.length || 0,
+      totalPurse,
+      minSquadSize: minSquad,
+      maxSquadSize: maxSquad,
+      defaultBasePrice: basePrice,
+      teams: (mirror.teams || []).map((t) => ({
+        id: t.id,
+        name: t.name,
+        shortCode: t.shortCode,
+        logoUrl: t.logoUrl,
+        primaryColor: t.primaryColor,
+      })),
+      isActive: id === (designatedActiveTournamentId || (isMain ? "league-main" : "")),
+      updatedAt: mirror.league.created_at || new Date().toISOString(),
+    });
+  }
+
+  return results;
+}
 
 /**
  * Loads the complete league configuration and rules from Google Sheets
@@ -384,7 +484,7 @@ export async function saveLeagueConfigToSheets(league: League, rules?: AuctionRu
 
   if (isAppsScriptConfigured()) {
     try {
-      await callAppsScript("SAVE_LEAGUE_CONFIG", { league: mirror.league, rules: mirror.rules });
+      await callAppsScript("SAVE_LEAGUE_CONFIG", { league: mirror.league, rules: mirror.rules, leagueId: league.id });
     } catch (err) {
       console.warn("[SheetsRepository] Apps Script saveLeagueConfig error:", err);
     }
@@ -461,8 +561,10 @@ export async function getTeamsFromSheets(leagueId: string, skipCache = false): P
 
       const teams: Team[] = [];
       for (const row of rows) {
-        const team = deserializeTeam(row);
-        if (team) teams.push(team);
+        if (row[1] === leagueId || (leagueId === "league-main" && (!row[1] || row[1] === "league-main"))) {
+          const team = deserializeTeam(row);
+          if (team) teams.push(team);
+        }
       }
       teamsCache.set(leagueId, { data: teams, expiresAt: Date.now() + CACHE_TTL_MS });
       return teams;
@@ -484,7 +586,7 @@ export async function saveTeamsToSheets(leagueId: string, teams: Team[]): Promis
 
   if (isAppsScriptConfigured()) {
     try {
-      await callAppsScript("SAVE_TEAMS", { teams });
+      await callAppsScript("SAVE_TEAMS", { teams, leagueId });
     } catch (err) {
       console.warn("[SheetsRepository] Apps Script saveTeams error:", err);
     }
@@ -499,6 +601,21 @@ export async function saveTeamsToSheets(leagueId: string, teams: Team[]): Promis
   }
 
   try {
+    const existingRes = await withGoogleRetry(
+      () =>
+        sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `${TAB_TEAMS}!A2:T`,
+        }),
+      { operationName: "GetExistingTeams" }
+    );
+    const existingRows = existingRes.data.values || [];
+    const preservedRows = existingRows.filter(
+      (r) => (r[1] || "league-main") !== leagueId
+    );
+    const newRows = teams.map(serializeTeam);
+    const combined = preservedRows.concat(newRows);
+
     await withGoogleRetry(
       () =>
         sheets.spreadsheets.values.clear({
@@ -508,15 +625,14 @@ export async function saveTeamsToSheets(leagueId: string, teams: Team[]): Promis
       { operationName: "ClearTeams" }
     );
 
-    if (teams.length > 0) {
-      const values = teams.map(serializeTeam);
+    if (combined.length > 0) {
       await withGoogleRetry(
         () =>
           sheets.spreadsheets.values.update({
             spreadsheetId,
-            range: `${TAB_TEAMS}!A2:T${teams.length + 1}`,
+            range: `${TAB_TEAMS}!A2:T${combined.length + 1}`,
             valueInputOption: "RAW",
-            requestBody: { values },
+            requestBody: { values: combined },
           }),
         { operationName: "UpdateTeams" }
       );
@@ -575,8 +691,10 @@ export async function getPlayersFromSheets(leagueId: string, skipCache = false):
 
       const players: Player[] = [];
       for (const row of rows) {
-        const player = deserializePlayer(row);
-        if (player) players.push(player);
+        if (row[1] === leagueId || (leagueId === "league-main" && (!row[1] || row[1] === "league-main"))) {
+          const player = deserializePlayer(row);
+          if (player) players.push(player);
+        }
       }
       playersCache.set(leagueId, { data: players, expiresAt: Date.now() + CACHE_TTL_MS });
       return players;
@@ -598,7 +716,7 @@ export async function savePlayersToSheets(leagueId: string, players: Player[]): 
 
   if (isAppsScriptConfigured()) {
     try {
-      await callAppsScript("SAVE_PLAYERS", { players });
+      await callAppsScript("SAVE_PLAYERS", { players, leagueId });
     } catch (err) {
       console.warn("[SheetsRepository] Apps Script savePlayers error:", err);
     }
@@ -613,6 +731,21 @@ export async function savePlayersToSheets(leagueId: string, players: Player[]): 
   }
 
   try {
+    const existingRes = await withGoogleRetry(
+      () =>
+        sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `${TAB_PLAYERS}!A2:V`,
+        }),
+      { operationName: "GetExistingPlayers" }
+    );
+    const existingRows = existingRes.data.values || [];
+    const preservedRows = existingRows.filter(
+      (r) => (r[1] || "league-main") !== leagueId
+    );
+    const newRows = players.map(serializePlayer);
+    const combined = preservedRows.concat(newRows);
+
     await withGoogleRetry(
       () =>
         sheets.spreadsheets.values.clear({
@@ -622,15 +755,14 @@ export async function savePlayersToSheets(leagueId: string, players: Player[]): 
       { operationName: "ClearPlayers" }
     );
 
-    if (players.length > 0) {
-      const values = players.map(serializePlayer);
+    if (combined.length > 0) {
       await withGoogleRetry(
         () =>
           sheets.spreadsheets.values.update({
             spreadsheetId,
-            range: `${TAB_PLAYERS}!A2:V${players.length + 1}`,
+            range: `${TAB_PLAYERS}!A2:V${combined.length + 1}`,
             valueInputOption: "RAW",
-            requestBody: { values },
+            requestBody: { values: combined },
           }),
         { operationName: "UpdatePlayers" }
       );
@@ -678,21 +810,23 @@ export async function getAuctionStateFromSheets(
         () =>
           sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: `${TAB_AUCTION_STATE}!A2:U2`,
+            range: `${TAB_AUCTION_STATE}!A2:U`,
           }),
         { operationName: "GetAuctionState" }
       );
 
-      const rows = res.data.values;
-      if (rows && rows[0]) {
-        const state = deserializeAuctionState(rows[0]);
-        if (state) {
-          stateCache.set(leagueId, { data: state, expiresAt: Date.now() + CACHE_TTL_MS });
-          return state;
+      const rows = res.data.values || [];
+      for (const row of rows) {
+        if (row[1] === leagueId || (leagueId === "league-main" && (!row[1] || row[1] === "league-main"))) {
+          const state = deserializeAuctionState(row);
+          if (state) {
+            stateCache.set(leagueId, { data: state, expiresAt: Date.now() + CACHE_TTL_MS });
+            return state;
+          }
         }
       }
 
-      // Tab empty, initialize
+      // Tab empty or state for leagueId not found, initialize
       const mirror = getOrCreateMemoryMirror(leagueId);
       await saveAuctionStateToSheets(leagueId, mirror.state);
       stateCache.set(leagueId, { data: mirror.state, expiresAt: Date.now() + CACHE_TTL_MS });
@@ -715,7 +849,7 @@ export async function saveAuctionStateToSheets(leagueId: string, state: AuctionS
 
   if (isAppsScriptConfigured()) {
     try {
-      await callAppsScript("SAVE_AUCTION_STATE", state);
+      await callAppsScript("SAVE_AUCTION_STATE", { state, leagueId });
     } catch (err) {
       console.warn("[SheetsRepository] Apps Script saveAuctionState error:", err);
     }
@@ -730,17 +864,49 @@ export async function saveAuctionStateToSheets(leagueId: string, state: AuctionS
   }
 
   try {
-    const values = [serializeAuctionState(state)];
-    await withGoogleRetry(
+    const existingRes = await withGoogleRetry(
       () =>
-        sheets.spreadsheets.values.update({
+        sheets.spreadsheets.values.get({
           spreadsheetId,
-          range: `${TAB_AUCTION_STATE}!A2:U2`,
-          valueInputOption: "RAW",
-          requestBody: { values },
+          range: `${TAB_AUCTION_STATE}!A2:U`,
         }),
-      { operationName: "SaveAuctionState" }
+      { operationName: "GetExistingAuctionStates" }
     );
+    const existingRows = existingRes.data.values || [];
+    let targetRowIndex = -1;
+    for (let i = 0; i < existingRows.length; i++) {
+      const r = existingRows[i];
+      if (r[1] === leagueId || (leagueId === "league-main" && (!r[1] || r[1] === "league-main"))) {
+        targetRowIndex = i + 2;
+        break;
+      }
+    }
+
+    const values = [serializeAuctionState(state)];
+    if (targetRowIndex > 0) {
+      await withGoogleRetry(
+        () =>
+          sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `${TAB_AUCTION_STATE}!A${targetRowIndex}:U${targetRowIndex}`,
+            valueInputOption: "RAW",
+            requestBody: { values },
+          }),
+        { operationName: "SaveAuctionState" }
+      );
+    } else {
+      await withGoogleRetry(
+        () =>
+          sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: `${TAB_AUCTION_STATE}!A1`,
+            valueInputOption: "RAW",
+            insertDataOption: "INSERT_ROWS",
+            requestBody: { values },
+          }),
+        { operationName: "AppendAuctionState" }
+      );
+    }
   } catch (error) {
     console.error(`[SheetsRepository] Failed to save auction state for ${leagueId}:`, error);
     throw error;
@@ -791,12 +957,14 @@ export async function getRecentBidsFromSheets(
       const rows = res.data.values || [];
       const bids: Bid[] = [];
 
-      // Rows stored chronologically; read from end for recents
-      for (let i = rows.length - 1; i >= 0 && bids.length < 50; i--) {
+      // Rows stored chronologically; read from end for recents isolated by leagueId
+      for (let i = rows.length - 1; i >= 0 && bids.length < limit; i--) {
         const row = rows[i];
         if (row[10] === "TRUE") continue; // Exclude undone bids
-        const bid = deserializeBid(row);
-        if (bid) bids.push(bid);
+        if (row[1] === leagueId || (leagueId === "league-main" && (!row[1] || row[1] === "league-main"))) {
+          const bid = deserializeBid(row);
+          if (bid) bids.push(bid);
+        }
       }
 
       recentBidsCache.set(leagueId, { data: bids, expiresAt: Date.now() + CACHE_TTL_MS });
@@ -869,21 +1037,24 @@ export async function markLastBidUndoneInSheets(leagueId: string): Promise<Bid |
     );
 
     const rows = res.data.values || [];
-    // Search backward for last row where isUndone !== TRUE
+    // Search backward for last row belonging to this league where isUndone !== TRUE
     for (let i = rows.length - 1; i >= 0; i--) {
-      if (rows[i][10] !== "TRUE") {
-        const rowIndex = i + 2; // 1-indexed, skipping header
-        await withGoogleRetry(
-          () =>
-            sheets.spreadsheets.values.update({
-              spreadsheetId,
-              range: `${TAB_BID_HISTORY}!K${rowIndex}`,
-              valueInputOption: "RAW",
-              requestBody: { values: [["TRUE"]] },
-            }),
-          { operationName: "MarkBidUndone" }
-        );
-        return deserializeBid(rows[i]);
+      const row = rows[i];
+      if (row[1] === leagueId || (leagueId === "league-main" && (!row[1] || row[1] === "league-main"))) {
+        if (row[10] !== "TRUE") {
+          const rowIndex = i + 2; // 1-indexed, skipping header
+          await withGoogleRetry(
+            () =>
+              sheets.spreadsheets.values.update({
+                spreadsheetId,
+                range: `${TAB_BID_HISTORY}!K${rowIndex}`,
+                valueInputOption: "RAW",
+                requestBody: { values: [["TRUE"]] },
+              }),
+            { operationName: "MarkBidUndone" }
+          );
+          return deserializeBid(row);
+        }
       }
     }
     return null;
@@ -918,8 +1089,10 @@ export async function getPurchasesFromSheets(leagueId: string): Promise<Purchase
     const rows = res.data.values || [];
     const purchases: PurchaseRecord[] = [];
     for (const row of rows) {
-      const p = deserializePurchase(row);
-      if (p) purchases.push(p);
+      if (row[1] === leagueId || (leagueId === "league-main" && (!row[1] || row[1] === "league-main"))) {
+        const p = deserializePurchase(row);
+        if (p) purchases.push(p);
+      }
     }
     return purchases;
   } catch (error) {
@@ -1172,44 +1345,19 @@ export async function executeSerializedAuctionAction(
           newBid: result.newBid,
           newPurchase: result.newPurchase,
           auditEntry: result.auditEntry,
+          leagueId,
         });
       } else if (isGoogleSheetsConfigured() && sheets && spreadsheetId) {
-        const batchData: Array<{ range: string; values: string[][] }> = [];
+        // Persist auction state, teams, and players preserving other tournaments
+        await saveAuctionStateToSheets(leagueId, updatedState);
 
-        // Updated auction state row (A2:P2)
-        batchData.push({
-          range: `${TAB_AUCTION_STATE}!A2:P2`,
-          values: [serializeAuctionState(updatedState)],
-        });
-
-        // Updated teams (if modified)
         if (result.updatedTeams && result.updatedTeams.length > 0) {
-          batchData.push({
-            range: `${TAB_TEAMS}!A2:T${result.updatedTeams.length + 1}`,
-            values: result.updatedTeams.map(serializeTeam),
-          });
+          await saveTeamsToSheets(leagueId, result.updatedTeams);
         }
 
-        // Updated players (if modified)
         if (result.updatedPlayers && result.updatedPlayers.length > 0) {
-          batchData.push({
-            range: `${TAB_PLAYERS}!A2:V${result.updatedPlayers.length + 1}`,
-            values: result.updatedPlayers.map(serializePlayer),
-          });
+          await savePlayersToSheets(leagueId, result.updatedPlayers);
         }
-
-        // Commit consolidated values in ONE atomic batchUpdate request!
-        await withGoogleRetry(
-          () =>
-            sheets.spreadsheets.values.batchUpdate({
-              spreadsheetId,
-              requestBody: {
-                valueInputOption: "RAW",
-                data: batchData,
-              },
-            }),
-          { operationName: "BatchUpdateAuctionStateAndEntities" }
-        );
 
         // Concurrent appends for bid history, purchase record, and audit log
         const appends: Promise<unknown>[] = [];
@@ -1234,6 +1382,15 @@ export async function executeSerializedAuctionAction(
       mirror.state = updatedState;
       if (result.updatedTeams) mirror.teams = result.updatedTeams;
       if (result.updatedPlayers) mirror.players = result.updatedPlayers;
+      if (result.newBid) {
+        mirror.bids = [result.newBid, ...mirror.bids];
+      }
+      if (result.newPurchase) {
+        mirror.purchases.push(result.newPurchase);
+      }
+      if (result.auditEntry) {
+        mirror.auditLogs.push(result.auditEntry);
+      }
 
       // Store in idempotency cache
       storeIdempotentResult(options?.actionId, result);

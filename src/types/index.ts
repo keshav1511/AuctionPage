@@ -54,7 +54,29 @@ export interface League {
   brandingPalette?: BrandingPalette;
   backgroundConfig?: BackgroundCustomization;
   importMetadata?: LeagueImportMetadata;
+  edition?: string | number;
+  status?: AuctionStatus;
+  tournamentId?: string;
   created_at?: string;
+}
+
+export interface TournamentSummary {
+  id: string;
+  name: string;
+  season?: string | number;
+  edition?: string | number;
+  description?: string;
+  logoUrl?: string;
+  status: AuctionStatus;
+  teamsCount: number;
+  playersCount: number;
+  totalPurse?: number;
+  minSquadSize?: number;
+  maxSquadSize?: number;
+  defaultBasePrice?: number;
+  teams?: Array<{ id: string; name: string; shortCode: string; logoUrl?: string; primaryColor?: string }>;
+  isActive?: boolean;
+  updatedAt?: string;
 }
 
 export interface LeagueImportMetadata {
@@ -167,20 +189,20 @@ export interface PlayerStatsSummary {
 export interface Player {
   id: string;
   seasonId: string;
-  registrationNo: string;
+  registrationNo?: string;
   fullName: string;
   name?: string;
   category?: PlayerCategory;
-  primaryRole: PlayerRole;
-  battingStyle: string;
-  bowlingStyle: string;
+  primaryRole?: PlayerRole | "";
+  battingStyle?: string;
+  bowlingStyle?: string;
   photoUrl: string;
   originalPhotoUrl?: string;
   normalizedPhotoUrl?: string;
   photoAspectRatio?: string;
   photoMatchStatus?: PhotoMatchStatus;
   driveFileId?: string;
-  basePrice: number;
+  basePrice?: number;
   basePriceOverride?: number;
   status: PlayerStatus;
   sortOrder: number;
@@ -239,6 +261,9 @@ export interface AuctionSession {
   announcement?: AuctionAnnouncement | null;
   bidCount: number;
   recentBids: Bid[];
+  version?: number;
+  revision?: number;
+  updatedAt?: string;
 }
 
 export interface BidSlab {

@@ -9,8 +9,8 @@ export function cn(...inputs: ClassValue[]) {
 /**
  * Format currency in Indian Rupees format (e.g. ₹ 2,50,000 or ₹ 2.5 L)
  */
-export function formatCurrency(amount: number, compact: boolean = false): string {
-  if (isNaN(amount) || amount === null || amount === undefined) return "₹0";
+export function formatCurrency(amount?: number | null, compact: boolean = false): string {
+  if (amount == null || isNaN(amount)) return "₹0";
 
   if (compact) {
     if (amount >= 10000000) {
@@ -31,7 +31,8 @@ export function formatCurrency(amount: number, compact: boolean = false): string
   }).format(amount);
 }
 
-export function formatRole(role: PlayerRole): string {
+export function formatRole(role?: PlayerRole | string | null): string {
+  if (!role) return "—";
   switch (role) {
     case "ALL_ROUNDER":
       return "All-Rounder";
@@ -63,7 +64,8 @@ export function getCategoryBadgeColor(category: PlayerCategory): string {
   }
 }
 
-export function getRoleBadgeColor(role: PlayerRole): string {
+export function getRoleBadgeColor(role?: PlayerRole | string | null): string {
+  if (!role) return "bg-slate-900 text-slate-400 border-slate-700";
   switch (role) {
     case "ALL_ROUNDER":
       return "bg-emerald-950/80 text-emerald-400 border-emerald-800";

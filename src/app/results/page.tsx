@@ -22,7 +22,7 @@ export default function ResultsPage() {
   const filteredPlayers = players.filter((player) => {
     const matchesSearch =
       player.fullName.toLowerCase().includes(search.toLowerCase()) ||
-      player.registrationNo.toLowerCase().includes(search.toLowerCase());
+      Boolean(player.registrationNo && player.registrationNo.toLowerCase().includes(search.toLowerCase()));
 
     const matchesStatus = statusFilter === "ALL" || player.status === statusFilter;
 

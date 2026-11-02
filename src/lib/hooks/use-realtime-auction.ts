@@ -2,6 +2,7 @@
 // NTL AUCTION PLATFORM - REAL-TIME AUCTION HOOK (GOOGLE SHEETS BACKED)
 // Client-side hook managing real-time auction synchronization via SSE & polling
 // Completely decoupled from Supabase; authoritative source of truth is Google Sheets
+// Features: Monotonic revision ordering, anti-cache polling, and auto-reconnecting SSE
 // ==============================================================================
 
 "use client";
@@ -11,12 +12,16 @@ import { AuctionSession, Team, Player, AuctionRules } from "@/types";
 import { MOCK_AUCTION_SESSION, MOCK_RULES } from "@/lib/mock-data/auction";
 import { NTL_TEAMS, NTL_PLAYERS } from "@/config/ntl-season-1";
 
+export type RealtimeConnectionStatus = "connected" | "reconnecting" | "unavailable";
+
 export interface RealtimeAuctionState {
   session: AuctionSession;
   teams: Team[];
   players: Player[];
   rules: AuctionRules;
   isConnected: boolean;
+  connectionStatus: RealtimeConnectionStatus;
+  currentRevision: number;
   remainingSeconds: number;
   lastActionMessage: string | null;
   isHammered: boolean;
@@ -37,72 +42,150 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
   const [session, setSession] = useState<AuctionSession>({
     ...MOCK_AUCTION_SESSION,
     seasonId: leagueId,
+    revision: 1,
+    version: 1,
   });
   const [teams, setTeams] = useState<Team[]>(NTL_TEAMS);
   const [players, setPlayers] = useState<Player[]>(NTL_PLAYERS);
   const [rules, setRules] = useState<AuctionRules>(MOCK_RULES);
   const [isConnected, setIsConnected] = useState<boolean>(false);
+  const [connectionStatus, setConnectionStatus] = useState<RealtimeConnectionStatus>("reconnecting");
+  const [currentRevision, setCurrentRevision] = useState<number>(1);
   const [remainingSeconds, setRemainingSeconds] = useState<number>(45);
   const [lastActionMessage, setLastActionMessage] = useState<string | null>(null);
   const [isHammered, setIsHammered] = useState<boolean>(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const lastRevisionRef = useRef<number>(1);
 
-  // 1. Fetch initial state on mount or when leagueId changes
+  // Centralized authoritative state application with monotonic revision ordering
+  const applyAuthoritativeState = useCallback(
+    (incoming: {
+      session?: AuctionSession;
+      teams?: Team[];
+      players?: Player[];
+      rules?: AuctionRules;
+      revision?: number;
+      version?: number;
+    }): boolean => {
+      const incomingRev =
+        incoming.revision ??
+        incoming.session?.revision ??
+        incoming.version ??
+        incoming.session?.version ??
+        0;
+
+      // Reject stale out-of-order updates
+      if (incomingRev > 0 && incomingRev < lastRevisionRef.current) {
+        return false;
+      }
+
+      if (incomingRev > 0) {
+        lastRevisionRef.current = Math.max(lastRevisionRef.current, incomingRev);
+        setCurrentRevision(lastRevisionRef.current);
+      }
+
+      if (incoming.session) {
+        setSession({
+          ...incoming.session,
+          revision: lastRevisionRef.current,
+          version: lastRevisionRef.current,
+        });
+      }
+      if (incoming.teams) setTeams(incoming.teams);
+      if (incoming.players) setPlayers(incoming.players);
+      if (incoming.rules) setRules(incoming.rules);
+
+      setIsConnected(true);
+      setConnectionStatus("connected");
+      return true;
+    },
+    []
+  );
+
+  // 1. Fetch authoritative state with explicit anti-cache parameters
   const fetchAuthoritativeState = useCallback(async () => {
     try {
-      const res = await fetch(`/api/auction/state?leagueId=${encodeURIComponent(leagueId)}`);
+      const rev = lastRevisionRef.current;
+      const res = await fetch(
+        `/api/auction/state?leagueId=${encodeURIComponent(leagueId)}&_t=${Date.now()}&_rev=${rev}`,
+        {
+          cache: "no-store",
+          headers: {
+            "Cache-Control": "no-cache",
+            Pragma: "no-cache",
+          },
+        }
+      );
       if (res.ok) {
         const data = await res.json();
         if (data.success) {
-          if (data.session) setSession(data.session);
-          if (data.teams) setTeams(data.teams);
-          if (data.players) setPlayers(data.players);
-          if (data.rules) setRules(data.rules);
-          setIsConnected(true);
+          applyAuthoritativeState({
+            session: data.session,
+            teams: data.teams,
+            players: data.players,
+            rules: data.rules,
+            revision: data.revision || data.version,
+          });
         }
       } else {
-        setIsConnected(false);
+        if (lastRevisionRef.current === 0) {
+          setIsConnected(false);
+          setConnectionStatus("unavailable");
+        }
       }
     } catch (err) {
       console.warn("[RealtimeAuction] Failed to fetch state from server:", err);
-      setIsConnected(false);
+      if (!isConnected) {
+        setConnectionStatus("reconnecting");
+      }
     }
-  }, [leagueId]);
+  }, [leagueId, applyAuthoritativeState, isConnected]);
 
   useEffect(() => {
     fetchAuthoritativeState();
   }, [fetchAuthoritativeState]);
 
-  // 2. Real-time Subscription via SSE Stream with automatic reconnection
+  // 2. Real-time Subscription via SSE Stream with auto-reconnection and exponential backoff
   useEffect(() => {
     let isSubscribed = true;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectAttempts = 0;
 
     const connectSSE = () => {
+      if (!isSubscribed) return;
       try {
-        const streamUrl = `/api/realtime/stream?leagueId=${encodeURIComponent(leagueId)}`;
+        const rev = lastRevisionRef.current;
+        const streamUrl = `/api/realtime/stream?leagueId=${encodeURIComponent(leagueId)}&_t=${Date.now()}&_rev=${rev}`;
         const es = new EventSource(streamUrl);
         eventSourceRef.current = es;
 
         es.onopen = () => {
-          if (isSubscribed) {
-            setIsConnected(true);
-          }
+          if (!isSubscribed) return;
+          reconnectAttempts = 0;
+          setIsConnected(true);
+          setConnectionStatus("connected");
         };
 
         es.onmessage = (event) => {
           if (!isSubscribed) return;
           try {
             const data = JSON.parse(event.data);
-            if (data.session) setSession(data.session);
-            if (data.teams) setTeams(data.teams);
-            if (data.players) setPlayers(data.players);
-            if (data.rules) setRules(data.rules);
-            setIsConnected(true);
+            applyAuthoritativeState({
+              session: data.session,
+              teams: data.teams,
+              players: data.players,
+              rules: data.rules,
+              revision: data.revision,
+            });
 
             if (data.type === "LOT_SOLD") {
               setIsHammered(true);
-            } else if (data.type === "LOT_CHANGED" || data.type === "BID_PLACED") {
+            } else if (
+              data.type === "LOT_CHANGED" ||
+              data.type === "BID_PLACED" ||
+              data.type === "LOT_RESET"
+            ) {
               setIsHammered(false);
             }
 
@@ -116,32 +199,46 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
         };
 
         es.onerror = () => {
-          // In serverless, SSE streams auto-timeout after 15-25s.
-          // Polling ensures uninterrupted live connectivity across serverless cold starts.
+          if (!isSubscribed) return;
+          try {
+            es.close();
+          } catch {}
+          eventSourceRef.current = null;
+          setConnectionStatus("reconnecting");
+
+          // Auto-reconnect with exponential backoff (1s, 2s, max 4s)
+          reconnectAttempts++;
+          const delay = Math.min(4000, 1000 * Math.pow(1.5, Math.min(reconnectAttempts - 1, 3)));
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(() => {
+            if (isSubscribed) connectSSE();
+          }, delay);
         };
       } catch (e) {
-        console.warn("[RealtimeAuction] EventSource initialization failed, relying on polling fallback:", e);
+        console.warn("[RealtimeAuction] EventSource error, fallback active:", e);
+        setConnectionStatus("reconnecting");
       }
     };
 
     connectSSE();
 
-    // 3. Failsafe background polling (every 2.5s) ensuring synchronization
-    // across separate Vercel instances, serverless cold starts, and network reconnects
+    // 3. Failsafe background polling (every 2.0s) guaranteeing continuous synchronization
     const pollingFallback = setInterval(() => {
       if (isSubscribed) {
         fetchAuthoritativeState();
       }
-    }, 2500);
+    }, 2000);
 
     return () => {
       isSubscribed = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       clearInterval(pollingFallback);
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
+        eventSourceRef.current = null;
       }
     };
-  }, [leagueId, fetchAuthoritativeState]);
+  }, [leagueId, fetchAuthoritativeState, applyAuthoritativeState]);
 
   // 4. Authoritative countdown derived from session.timerExpiresAt
   useEffect(() => {
@@ -181,25 +278,32 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
           (payload.actionId as string) ||
           `act-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
+        const clientVersion = lastRevisionRef.current;
+
         const res = await fetch("/api/auction/action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ leagueId, actionId, ...payload }),
+          body: JSON.stringify({ leagueId, actionId, clientVersion, ...payload }),
         });
         const data = await res.json();
         if (!res.ok || !data.success) {
           return { success: false, error: data.error || "Action rejected by server" };
         }
-        if (data.session) setSession(data.session);
-        if (data.teams) setTeams(data.teams);
-        if (data.players) setPlayers(data.players);
-        if (data.rules) setRules(data.rules);
+
+        applyAuthoritativeState({
+          session: data.session,
+          teams: data.teams,
+          players: data.players,
+          rules: data.rules,
+          revision: data.session?.revision || (lastRevisionRef.current + 1),
+        });
+
         return { success: true };
       } catch (err) {
         return { success: false, error: (err as Error).message || "Network error" };
       }
     },
-    [leagueId]
+    [leagueId, applyAuthoritativeState]
   );
 
   const placeBid = useCallback(
@@ -247,6 +351,8 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
     players,
     rules,
     isConnected,
+    connectionStatus,
+    currentRevision,
     remainingSeconds,
     lastActionMessage,
     isHammered,

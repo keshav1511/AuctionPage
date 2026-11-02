@@ -75,10 +75,10 @@ function doPost(e) {
         return handleInitWorkbook(ss, data);
 
       case "GET_ALL_DATA":
-        return handleGetAllData(ss);
+        return handleGetAllData(ss, data);
 
       case "GET_AUCTION_STATE":
-        return handleGetAuctionState(ss);
+        return handleGetAuctionState(ss, data);
 
       case "SAVE_AUCTION_STATE":
         return handleSaveAuctionState(ss, data);
@@ -207,9 +207,9 @@ function handleInitWorkbook(ss, data) {
 }
 
 // ------------------------------------------------------------------------------
-// 2. GET_ALL_DATA — ATOMIC READ OF ALL TABS
+// 2. GET_ALL_DATA — ATOMIC READ OF ALL TABS WITH MULTI-TOURNAMENT ISOLATION
 // ------------------------------------------------------------------------------
-function handleGetAllData(ss) {
+function handleGetAllData(ss, data) {
   const configSheet = ss.getSheetByName(TABS.LEAGUE_CONFIG);
   const teamsSheet = ss.getSheetByName(TABS.TEAMS);
   const playersSheet = ss.getSheetByName(TABS.PLAYERS);
@@ -217,17 +217,22 @@ function handleGetAllData(ss) {
   const bidsSheet = ss.getSheetByName(TABS.BID_HISTORY);
   const purchasesSheet = ss.getSheetByName(TABS.PURCHASES);
 
+  const targetLeagueId = (data && data.leagueId) ? String(data.leagueId).trim() : "league-main";
+
+  // 1. Read all tournaments from League_Config
+  let tournaments = [];
   let config = null;
   if (configSheet && configSheet.getLastRow() >= 2) {
-    const r = configSheet.getRange(2, 1, 1, 17).getValues()[0];
-    let brandingPalette = undefined;
-    let rules = undefined;
-    try { if (r[14]) brandingPalette = JSON.parse(r[14]); } catch {}
-    try { if (r[15]) rules = JSON.parse(r[15]); } catch {}
+    const configRows = configSheet.getRange(2, 1, configSheet.getLastRow() - 1, 17).getValues();
+    for (let i = 0; i < configRows.length; i++) {
+      const r = configRows[i];
+      let brandingPalette = undefined;
+      let rules = undefined;
+      try { if (r[14]) brandingPalette = JSON.parse(r[14]); } catch {}
+      try { if (r[15]) rules = JSON.parse(r[15]); } catch {}
 
-    config = {
-      league: {
-        id: r[0] || "league-main",
+      const tournamentItem = {
+        id: r[0] || (i === 0 ? "league-main" : ("league-" + (i + 1))),
         slug: r[1] || "cricket-auction",
         name: r[2] || "Cricket Auction",
         description: r[3] || "",
@@ -242,120 +247,198 @@ function handleGetAllData(ss) {
         primaryColor: r[12] || "#059669",
         secondaryColor: r[13] || "#F59E0B",
         brandingPalette,
-      },
-      rules: rules || {
-        id: "rules-" + (r[0] || "league-main"),
-        seasonId: r[0] || "league-main",
-        totalPurse: 100000,
-        basePrice: 2000,
-        minBidIncrement: 500,
-        initialTimerSeconds: 45,
-        bidExtensionSeconds: 10,
-        minimumSquadSize: 8,
-        maximumSquadSize: 8,
+      };
+
+      tournaments.push(tournamentItem);
+
+      if (r[0] === targetLeagueId || (targetLeagueId === "league-main" && (!r[0] || r[0] === "league-main"))) {
+        config = {
+          league: tournamentItem,
+          rules: rules || {
+            id: "rules-" + tournamentItem.id,
+            seasonId: tournamentItem.id,
+            totalPurse: 100000,
+            basePrice: 2000,
+            minBidIncrement: 500,
+            initialTimerSeconds: 45,
+            bidExtensionSeconds: 10,
+            minimumSquadSize: 8,
+            maximumSquadSize: 8,
+          }
+        };
       }
-    };
+    }
+
+    if (!config && tournaments.length > 0) {
+      config = {
+        league: tournaments[0],
+        rules: {
+          id: "rules-" + tournaments[0].id,
+          seasonId: tournaments[0].id,
+          totalPurse: 100000,
+          basePrice: 2000,
+          minBidIncrement: 500,
+          initialTimerSeconds: 45,
+          bidExtensionSeconds: 10,
+          minimumSquadSize: 8,
+          maximumSquadSize: 8,
+        }
+      };
+    }
   }
 
+  // 2. Read auction state for target tournament
   let state = null;
   if (stateSheet && stateSheet.getLastRow() >= 2) {
-    const row = stateSheet.getRange(2, 1, 1, 21).getValues()[0];
+    const stateRows = stateSheet.getRange(2, 1, stateSheet.getLastRow() - 1, 21).getValues();
+    let matchedRow = null;
+    for (let i = 0; i < stateRows.length; i++) {
+      const r = stateRows[i];
+      if (r[1] === targetLeagueId || (targetLeagueId === "league-main" && (!r[1] || r[1] === "league-main"))) {
+        matchedRow = r;
+        break;
+      }
+    }
+    if (!matchedRow && stateRows.length > 0 && targetLeagueId === "league-main") {
+      matchedRow = stateRows[0];
+    }
+
+    if (matchedRow) {
+      state = {
+        id: matchedRow[0] || ("auction-" + targetLeagueId),
+        seasonId: matchedRow[1] || targetLeagueId,
+        status: matchedRow[2] || "IDLE",
+        currentPlayerId: matchedRow[3] || null,
+        currentHighestBid: Number(matchedRow[4]) || 0,
+        currentLeadingTeamId: matchedRow[5] || null,
+        timerSeconds: Number(matchedRow[6]) || 45,
+        timerExpiresAt: matchedRow[7] || null,
+        round: Number(matchedRow[8]) || 1,
+        roundStage: matchedRow[9] || "MAIN",
+        round2QueueJson: matchedRow[10] || "[]",
+        round1Completed: String(matchedRow[11]).toUpperCase() === "TRUE",
+        bidCount: Number(matchedRow[12]) || 0,
+        bidExtensionSeconds: Number(matchedRow[13]) || 10,
+        version: Number(matchedRow[14]) || 1,
+        updatedAt: matchedRow[15] || new Date().toISOString(),
+        lastActionType: matchedRow[16] || undefined,
+        lastActionPayloadJson: matchedRow[17] || undefined,
+        consecutiveBidsJson: matchedRow[18] || undefined,
+        pausedRemainingSeconds: matchedRow[19] ? Number(matchedRow[19]) : undefined,
+        announcementJson: matchedRow[20] || undefined,
+      };
+    }
+  }
+
+  if (!state) {
     state = {
-      id: row[0],
-      seasonId: row[1],
-      status: row[2],
-      currentPlayerId: row[3] || null,
-      currentHighestBid: Number(row[4]) || 0,
-      currentLeadingTeamId: row[5] || null,
-      timerSeconds: Number(row[6]) || 45,
-      timerExpiresAt: row[7] || null,
-      round: Number(row[8]) || 1,
-      roundStage: row[9] || "MAIN",
-      round2QueueJson: row[10] || "[]",
-      round1Completed: String(row[11]).toUpperCase() === "TRUE",
-      bidCount: Number(row[12]) || 0,
-      bidExtensionSeconds: Number(row[13]) || 10,
-      version: Number(row[14]) || 1,
-      updatedAt: row[15] || new Date().toISOString(),
-      lastActionType: row[16] || undefined,
-      lastActionPayloadJson: row[17] || undefined,
-      consecutiveBidsJson: row[18] || undefined,
-      pausedRemainingSeconds: row[19] ? Number(row[19]) : undefined,
-      announcementJson: row[20] || undefined,
+      id: "auction-" + targetLeagueId,
+      seasonId: targetLeagueId,
+      status: "IDLE",
+      currentPlayerId: null,
+      currentHighestBid: 0,
+      currentLeadingTeamId: null,
+      timerSeconds: 45,
+      timerExpiresAt: null,
+      round: 1,
+      roundStage: "MAIN",
+      round2QueueJson: "[]",
+      round1Completed: false,
+      bidCount: 0,
+      bidExtensionSeconds: 10,
+      version: 1,
+      updatedAt: new Date().toISOString(),
     };
   }
 
+  // 3. Filter teams isolated by target tournament
   let teams = [];
   if (teamsSheet && teamsSheet.getLastRow() >= 2) {
     const rows = teamsSheet.getRange(2, 1, teamsSheet.getLastRow() - 1, 20).getValues();
-    teams = rows.map(r => ({
-      id: r[0],
-      seasonId: r[1],
-      name: r[2],
-      shortCode: r[3],
-      logoUrl: r[4] || "",
-      primaryColor: r[5] || "#059669",
-      secondaryColor: r[6] || "#F59E0B",
-      ownerName: r[7] || "",
-      ownerPhotoUrl: r[8] || "",
-      iconPlayerName: r[9] || "",
-      iconPlayerPhotoUrl: r[10] || "",
-      purse: {
-        totalBudget: Number(r[11]) || 100000,
-        totalPurse: Number(r[11]) || 100000,
-        remainingAmount: Number(r[12]) || 100000,
-        spentAmount: Number(r[13]) || 0,
-        minPlayers: Number(r[14]) || 8,
-        maxPlayers: Number(r[15]) || 8,
-        reservedForSquad: Number(r[16]) || 12000,
-        reservedPurse: Number(r[16]) || 12000,
-      },
-      squadCount: Number(r[17]) || 0,
-      isCompleted: String(r[18]).toUpperCase() === "TRUE",
-      completionStatus: String(r[18]).toUpperCase() === "TRUE" ? "COMPLETED" : "INCOMPLETE",
-    }));
+    teams = rows
+      .filter(r => {
+        const rowSeason = r[1] || "league-main";
+        return rowSeason === targetLeagueId || (targetLeagueId === "league-main" && !r[1]);
+      })
+      .map(r => ({
+        id: r[0],
+        seasonId: r[1] || targetLeagueId,
+        name: r[2],
+        shortCode: r[3],
+        logoUrl: r[4] || "",
+        primaryColor: r[5] || "#059669",
+        secondaryColor: r[6] || "#F59E0B",
+        ownerName: r[7] || "",
+        ownerPhotoUrl: r[8] || "",
+        iconPlayerName: r[9] || "",
+        iconPlayerPhotoUrl: r[10] || "",
+        purse: {
+          totalBudget: Number(r[11]) || 100000,
+          totalPurse: Number(r[11]) || 100000,
+          remainingAmount: Number(r[12]) || 100000,
+          spentAmount: Number(r[13]) || 0,
+          minPlayers: Number(r[14]) || 8,
+          maxPlayers: Number(r[15]) || 8,
+          reservedForSquad: Number(r[16]) || 12000,
+          reservedPurse: Number(r[16]) || 12000,
+        },
+        squadCount: Number(r[17]) || 0,
+        isCompleted: String(r[18]).toUpperCase() === "TRUE",
+        completionStatus: String(r[18]).toUpperCase() === "TRUE" ? "COMPLETED" : "INCOMPLETE",
+      }));
   }
 
+  // 4. Filter players isolated by target tournament
   let players = [];
   if (playersSheet && playersSheet.getLastRow() >= 2) {
     const rows = playersSheet.getRange(2, 1, playersSheet.getLastRow() - 1, 16).getValues();
-    players = rows.map(r => ({
-      id: r[0],
-      seasonId: r[1],
-      name: r[2],
-      fullName: r[2],
-      registrationNo: r[0],
-      category: r[3] || "SILVER",
-      primaryRole: r[4] || "ALL_ROUNDER",
-      battingStyle: r[5] || "Right-Hand Bat",
-      bowlingStyle: r[6] || "Right-Arm Medium",
-      photoUrl: r[7] || "",
-      basePrice: Number(r[8]) || 2000,
-      status: r[9] || "AVAILABLE",
-      teamId: r[10] || undefined,
-      soldToTeamId: r[10] || undefined,
-      soldPrice: r[11] ? Number(r[11]) : undefined,
-      soldTime: r[12] || undefined,
-      isIcon: String(r[13]).toUpperCase() === "TRUE",
-      sortOrder: Number(r[14]) || 1,
-    }));
+    players = rows
+      .filter(r => {
+        const rowSeason = r[1] || "league-main";
+        return rowSeason === targetLeagueId || (targetLeagueId === "league-main" && !r[1]);
+      })
+      .map(r => ({
+        id: r[0],
+        seasonId: r[1] || targetLeagueId,
+        name: r[2],
+        fullName: r[2],
+        registrationNo: r[0],
+        category: r[3] || undefined,
+        primaryRole: r[4] || "",
+        battingStyle: r[5] || "",
+        bowlingStyle: r[6] || "",
+        photoUrl: r[7] || "",
+        basePrice: r[8] ? Number(r[8]) : 0,
+        status: r[9] || "AVAILABLE",
+        teamId: r[10] || undefined,
+        soldToTeamId: r[10] || undefined,
+        soldPrice: r[11] ? Number(r[11]) : undefined,
+        soldTime: r[12] || undefined,
+        isIcon: String(r[13]).toUpperCase() === "TRUE",
+        sortOrder: Number(r[14]) || 1,
+      }));
   }
 
+  // 5. Filter recent bids isolated by target tournament
   let recentBids = [];
   if (bidsSheet && bidsSheet.getLastRow() >= 2) {
-    const numRows = Math.min(bidsSheet.getLastRow() - 1, 30);
-    const startRow = bidsSheet.getLastRow() - numRows + 1;
-    const rows = bidsSheet.getRange(startRow, 1, numRows, 8).getValues();
-    recentBids = rows.map(r => ({
-      id: r[0],
-      seasonId: r[1],
-      playerId: r[2],
-      teamId: r[3],
-      amount: Number(r[4]),
-      bidTime: r[5],
-      round: Number(r[6]),
-      isWinning: String(r[7]).toUpperCase() === "TRUE",
-    })).reverse();
+    const rows = bidsSheet.getRange(2, 1, bidsSheet.getLastRow() - 1, 8).getValues();
+    recentBids = rows
+      .filter(r => {
+        const rowSeason = r[1] || "league-main";
+        return rowSeason === targetLeagueId || (targetLeagueId === "league-main" && !r[1]);
+      })
+      .slice(-30)
+      .map(r => ({
+        id: r[0],
+        seasonId: r[1] || targetLeagueId,
+        playerId: r[2],
+        teamId: r[3],
+        amount: Number(r[4]),
+        bidTime: r[5],
+        round: Number(r[6]),
+        isWinning: String(r[7]).toUpperCase() === "TRUE",
+      })).reverse();
   }
 
   return jsonResponse({
@@ -366,13 +449,15 @@ function handleGetAllData(ss) {
       teams,
       players,
       recentBids,
+      tournaments,
+      activeTournamentId: targetLeagueId,
       timestamp: new Date().toISOString(),
     }
   });
 }
 
 // ------------------------------------------------------------------------------
-// 3. SAVE_LEAGUE_CONFIG — PERSIST LEAGUE & AUCTION RULES
+// 3. SAVE_LEAGUE_CONFIG — PERSIST TOURNAMENT & AUCTION RULES
 // ------------------------------------------------------------------------------
 function handleSaveLeagueConfig(ss, data) {
   const lock = LockService.getScriptLock();
@@ -386,10 +471,11 @@ function handleSaveLeagueConfig(ss, data) {
 
     const league = data.league || {};
     const rules = data.rules || {};
+    const targetId = league.id || "league-main";
 
     const row = [
-      league.id || "league-main",
-      league.slug || "cricket-auction",
+      targetId,
+      league.slug || targetId,
       league.name || "Cricket Auction",
       league.description || "",
       league.logoUrl || "",
@@ -407,7 +493,23 @@ function handleSaveLeagueConfig(ss, data) {
       new Date().toISOString()
     ];
 
-    sheet.getRange(2, 1, 1, 17).setValues([row]);
+    let foundRow = -1;
+    if (sheet.getLastRow() >= 2) {
+      const ids = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+      for (let i = 0; i < ids.length; i++) {
+        if (ids[i][0] === targetId || (targetId === "league-main" && (!ids[i][0] || ids[i][0] === "league-main"))) {
+          foundRow = i + 2;
+          break;
+        }
+      }
+    }
+
+    if (foundRow > 0) {
+      sheet.getRange(foundRow, 1, 1, 17).setValues([row]);
+    } else {
+      sheet.appendRow(row);
+    }
+
     return jsonResponse({ success: true, message: "League configuration saved successfully." });
   } finally {
     lock.releaseLock();
@@ -415,7 +517,7 @@ function handleSaveLeagueConfig(ss, data) {
 }
 
 // ------------------------------------------------------------------------------
-// 4. SAVE_TEAMS — REPLACES TEAMS TAB
+// 4. SAVE_TEAMS — PRESERVES TEAMS OF OTHER TOURNAMENTS
 // ------------------------------------------------------------------------------
 function handleSaveTeams(ss, data) {
   const lock = LockService.getScriptLock();
@@ -428,31 +530,42 @@ function handleSaveTeams(ss, data) {
       "squadCount", "isCompleted", "updatedAt"
     ]);
 
-    // Clear existing data rows
+    const targetLeagueId = (data && data.leagueId) ? String(data.leagueId).trim() : ((data && data.teams && data.teams[0] && data.teams[0].seasonId) ? String(data.teams[0].seasonId).trim() : "league-main");
+
+    // Preserve rows belonging to OTHER tournaments
+    let preservedRows = [];
     if (sheet.getLastRow() >= 2) {
-      sheet.getRange(2, 1, sheet.getLastRow() - 1, 20).clearContent();
+      const existing = sheet.getRange(2, 1, sheet.getLastRow() - 1, 20).getValues();
+      preservedRows = existing.filter(r => {
+        const sId = r[1] || "league-main";
+        return sId !== targetLeagueId;
+      });
     }
 
     const teams = data.teams || [];
-    if (teams.length > 0) {
-      const rows = teams.map(t => {
-        const totalPurse = t.purse?.totalBudget ?? t.purse?.totalPurse ?? 100000;
-        const remainingPurse = t.purse?.remainingAmount ?? totalPurse;
-        const spentPurse = t.purse?.spentAmount ?? 0;
-        const minPlayers = t.purse?.minPlayers ?? 8;
-        const maxPlayers = t.purse?.maxPlayers ?? 8;
-        const reservedPurse = t.purse?.reservedForSquad ?? t.purse?.reservedPurse ?? 0;
+    const newRows = teams.map(t => {
+      const totalPurse = t.purse?.totalBudget ?? t.purse?.totalPurse ?? 100000;
+      const remainingPurse = t.purse?.remainingAmount ?? totalPurse;
+      const spentPurse = t.purse?.spentAmount ?? 0;
+      const minPlayers = t.purse?.minPlayers ?? 8;
+      const maxPlayers = t.purse?.maxPlayers ?? 8;
+      const reservedPurse = t.purse?.reservedForSquad ?? t.purse?.reservedPurse ?? 0;
 
-        return [
-          t.id, t.seasonId || "league-main", t.name, t.shortCode || t.name.substring(0, 3).toUpperCase(),
-          t.logoUrl || "", t.primaryColor || "#059669", t.secondaryColor || "#F59E0B",
-          t.ownerName || "", t.ownerPhotoUrl || "", t.iconPlayerName || "", t.iconPlayerPhotoUrl || "",
-          totalPurse, remainingPurse, spentPurse, minPlayers, maxPlayers, reservedPurse,
-          t.squadCount || 0, t.isCompleted ? "TRUE" : "FALSE", new Date().toISOString()
-        ];
-      });
+      return [
+        t.id, targetLeagueId, t.name, t.shortCode || t.name.substring(0, 3).toUpperCase(),
+        t.logoUrl || "", t.primaryColor || "#059669", t.secondaryColor || "#F59E0B",
+        t.ownerName || "", t.ownerPhotoUrl || "", t.iconPlayerName || "", t.iconPlayerPhotoUrl || "",
+        totalPurse, remainingPurse, spentPurse, minPlayers, maxPlayers, reservedPurse,
+        t.squadCount || 0, t.isCompleted ? "TRUE" : "FALSE", new Date().toISOString()
+      ];
+    });
 
-      sheet.getRange(2, 1, rows.length, 20).setValues(rows);
+    const combined = preservedRows.concat(newRows);
+    if (sheet.getLastRow() >= 2) {
+      sheet.getRange(2, 1, sheet.getLastRow() - 1, 20).clearContent();
+    }
+    if (combined.length > 0) {
+      sheet.getRange(2, 1, combined.length, 20).setValues(combined);
     }
 
     return jsonResponse({ success: true, message: "Teams updated successfully", count: teams.length });
@@ -462,7 +575,7 @@ function handleSaveTeams(ss, data) {
 }
 
 // ------------------------------------------------------------------------------
-// 5. SAVE_PLAYERS — REPLACES PLAYERS TAB
+// 5. SAVE_PLAYERS — PRESERVES PLAYERS OF OTHER TOURNAMENTS
 // ------------------------------------------------------------------------------
 function handleSavePlayers(ss, data) {
   const lock = LockService.getScriptLock();
@@ -474,23 +587,34 @@ function handleSavePlayers(ss, data) {
       "isIcon", "sortOrder", "updatedAt"
     ]);
 
-    // Clear existing data rows
+    const targetLeagueId = (data && data.leagueId) ? String(data.leagueId).trim() : ((data && data.players && data.players[0] && data.players[0].seasonId) ? String(data.players[0].seasonId).trim() : "league-main");
+
+    // Preserve rows belonging to OTHER tournaments
+    let preservedRows = [];
     if (sheet.getLastRow() >= 2) {
-      sheet.getRange(2, 1, sheet.getLastRow() - 1, 16).clearContent();
+      const existing = sheet.getRange(2, 1, sheet.getLastRow() - 1, 16).getValues();
+      preservedRows = existing.filter(r => {
+        const sId = r[1] || "league-main";
+        return sId !== targetLeagueId;
+      });
     }
 
     const players = data.players || [];
-    if (players.length > 0) {
-      const rows = players.map((p, idx) => [
-        p.id, p.seasonId || "league-main", p.fullName || p.name,
-        p.category || "SILVER", p.primaryRole || "ALL_ROUNDER",
-        p.battingStyle || "Right-Hand Bat", p.bowlingStyle || "Right-Arm Medium",
-        p.photoUrl || "", Number(p.basePrice) || 2000, p.status || "AVAILABLE",
-        p.soldToTeamId || p.teamId || "", p.soldPrice || "", p.soldTime || "",
-        p.isIcon ? "TRUE" : "FALSE", p.sortOrder || (idx + 1), new Date().toISOString()
-      ]);
+    const newRows = players.map((p, idx) => [
+      p.id, targetLeagueId, p.fullName || p.name,
+      p.category || "", p.primaryRole || "",
+      p.battingStyle || "", p.bowlingStyle || "",
+      p.photoUrl || "", p.basePrice != null && p.basePrice > 0 ? Number(p.basePrice) : "", p.status || "AVAILABLE",
+      p.soldToTeamId || p.teamId || "", p.soldPrice || "", p.soldTime || "",
+      p.isIcon ? "TRUE" : "FALSE", p.sortOrder || (idx + 1), new Date().toISOString()
+    ]);
 
-      sheet.getRange(2, 1, rows.length, 16).setValues(rows);
+    const combined = preservedRows.concat(newRows);
+    if (sheet.getLastRow() >= 2) {
+      sheet.getRange(2, 1, sheet.getLastRow() - 1, 16).clearContent();
+    }
+    if (combined.length > 0) {
+      sheet.getRange(2, 1, combined.length, 16).setValues(combined);
     }
 
     return jsonResponse({ success: true, message: "Players updated successfully", count: players.length });
@@ -576,6 +700,7 @@ function handlePlaceBid(ss, data) {
   lock.waitLock(10000);
   try {
     const { teamId, amount, playerId, bidTime } = data;
+    const targetLeagueId = (data && data.leagueId) ? String(data.leagueId).trim() : "league-main";
     const stateSheet = ss.getSheetByName(TABS.AUCTION_STATE);
     const bidsSheet = ss.getSheetByName(TABS.BID_HISTORY);
 
@@ -583,7 +708,18 @@ function handlePlaceBid(ss, data) {
       return jsonResponse({ success: false, error: "Auction state not initialized" }, 400);
     }
 
-    const stateRow = stateSheet.getRange(2, 1, 1, 21).getValues()[0];
+    let stateRowIndex = 2;
+    if (stateSheet.getLastRow() >= 2) {
+      const existingStates = stateSheet.getRange(2, 2, stateSheet.getLastRow() - 1, 1).getValues();
+      for (let i = 0; i < existingStates.length; i++) {
+        if (existingStates[i][0] === targetLeagueId || (targetLeagueId === "league-main" && (!existingStates[i][0] || existingStates[i][0] === "league-main"))) {
+          stateRowIndex = i + 2;
+          break;
+        }
+      }
+    }
+
+    const stateRow = stateSheet.getRange(stateRowIndex, 1, 1, 21).getValues()[0];
     const currentStatus = stateRow[2];
     const currentHighestBid = Number(stateRow[4]) || 0;
     const currentPlayerId = stateRow[3];
@@ -596,7 +732,10 @@ function handlePlaceBid(ss, data) {
     if (playerId && currentPlayerId && playerId !== currentPlayerId) {
       return jsonResponse({ success: false, error: "Lot player mismatch" }, 400);
     }
-    if (amount <= currentHighestBid) {
+    if (amount <= 0) {
+      return jsonResponse({ success: false, error: "Bid amount must be strictly greater than 0" }, 400);
+    }
+    if (bidCount > 0 && amount <= currentHighestBid) {
       return jsonResponse({ success: false, error: "Bid amount must be higher than " + currentHighestBid }, 400);
     }
 
@@ -606,19 +745,19 @@ function handlePlaceBid(ss, data) {
     version++;
     bidCount++;
 
-    stateSheet.getRange(2, 5, 1, 4).setValues([[
+    stateSheet.getRange(stateRowIndex, 5, 1, 4).setValues([[
       amount,
       teamId,
       15,
       new Date(expiryTime).toISOString()
     ]]);
-    stateSheet.getRange(2, 13).setValue(bidCount);
-    stateSheet.getRange(2, 15).setValue(version);
-    stateSheet.getRange(2, 16).setValue(new Date().toISOString());
+    stateSheet.getRange(stateRowIndex, 13).setValue(bidCount);
+    stateSheet.getRange(stateRowIndex, 15).setValue(version);
+    stateSheet.getRange(stateRowIndex, 16).setValue(new Date().toISOString());
 
     const bidId = "bid-" + now + "-" + Math.floor(Math.random() * 1000);
     bidsSheet.appendRow([
-      bidId, "league-main", currentPlayerId, teamId, amount,
+      bidId, targetLeagueId, currentPlayerId, teamId, amount,
       bidTime || new Date().toISOString(), Number(stateRow[8]) || 1, "FALSE"
     ]);
 
@@ -645,6 +784,7 @@ function handleHammerSold(ss, data) {
   lock.waitLock(10000);
   try {
     const { playerId, teamId, amount, announcement } = data;
+    const targetLeagueId = (data && data.leagueId) ? String(data.leagueId).trim() : "league-main";
     const stateSheet = ss.getSheetByName(TABS.AUCTION_STATE);
     const playersSheet = ss.getSheetByName(TABS.PLAYERS);
     const teamsSheet = ss.getSheetByName(TABS.TEAMS);
@@ -653,9 +793,9 @@ function handleHammerSold(ss, data) {
 
     // 1. Update Player to SOLD
     if (playersSheet && playersSheet.getLastRow() >= 2) {
-      const pData = playersSheet.getRange(2, 1, playersSheet.getLastRow() - 1, 1).getValues();
+      const pData = playersSheet.getRange(2, 1, playersSheet.getLastRow() - 1, 2).getValues();
       for (let i = 0; i < pData.length; i++) {
-        if (pData[i][0] === playerId) {
+        if (pData[i][0] === playerId && (pData[i][1] === targetLeagueId || !pData[i][1] || targetLeagueId === "league-main")) {
           playersSheet.getRange(i + 2, 10, 1, 3).setValues([[
             "SOLD", teamId, amount
           ]]);
@@ -667,9 +807,9 @@ function handleHammerSold(ss, data) {
 
     // 2. Update Team purse and squad count
     if (teamsSheet && teamsSheet.getLastRow() >= 2) {
-      const tData = teamsSheet.getRange(2, 1, teamsSheet.getLastRow() - 1, 1).getValues();
+      const tData = teamsSheet.getRange(2, 1, teamsSheet.getLastRow() - 1, 2).getValues();
       for (let i = 0; i < tData.length; i++) {
-        if (tData[i][0] === teamId) {
+        if (tData[i][0] === teamId && (tData[i][1] === targetLeagueId || !tData[i][1] || targetLeagueId === "league-main")) {
           const rowVals = teamsSheet.getRange(i + 2, 12, 1, 8).getValues()[0];
           const rem = Math.max(0, Number(rowVals[1]) - amount);
           const spent = Number(rowVals[2]) + amount;
@@ -686,22 +826,30 @@ function handleHammerSold(ss, data) {
 
     // 3. Record in Purchases
     purchasesSheet.appendRow([
-      "pur-" + Date.now(), "league-main", teamId, playerId, amount, 1, new Date().toISOString()
+      "pur-" + Date.now(), targetLeagueId, teamId, playerId, amount, 1, new Date().toISOString()
     ]);
 
     // 4. Update Announcement in State
     if (stateSheet && stateSheet.getLastRow() >= 2) {
-      const version = (Number(stateSheet.getRange(2, 15).getValue()) || 1) + 1;
-      stateSheet.getRange(2, 15).setValue(version);
-      stateSheet.getRange(2, 16).setValue(new Date().toISOString());
+      let stateRowIndex = 2;
+      const existingStates = stateSheet.getRange(2, 2, stateSheet.getLastRow() - 1, 1).getValues();
+      for (let i = 0; i < existingStates.length; i++) {
+        if (existingStates[i][0] === targetLeagueId || (targetLeagueId === "league-main" && (!existingStates[i][0] || existingStates[i][0] === "league-main"))) {
+          stateRowIndex = i + 2;
+          break;
+        }
+      }
+      const version = (Number(stateSheet.getRange(stateRowIndex, 15).getValue()) || 1) + 1;
+      stateSheet.getRange(stateRowIndex, 15).setValue(version);
+      stateSheet.getRange(stateRowIndex, 16).setValue(new Date().toISOString());
       if (announcement) {
-        stateSheet.getRange(2, 21).setValue(JSON.stringify(announcement));
+        stateSheet.getRange(stateRowIndex, 21).setValue(JSON.stringify(announcement));
       }
     }
 
     // 5. Audit Log
     auditSheet.appendRow([
-      "audit-" + Date.now(), "league-main", "HAMMER_SOLD",
+      "audit-" + Date.now(), targetLeagueId, "HAMMER_SOLD",
       JSON.stringify({ playerId, teamId, amount }), "Admin", new Date().toISOString()
     ]);
 
@@ -719,14 +867,15 @@ function handleHammerUnsold(ss, data) {
   lock.waitLock(10000);
   try {
     const { playerId, announcement } = data;
+    const targetLeagueId = (data && data.leagueId) ? String(data.leagueId).trim() : "league-main";
     const stateSheet = ss.getSheetByName(TABS.AUCTION_STATE);
     const playersSheet = ss.getSheetByName(TABS.PLAYERS);
     const auditSheet = ss.getSheetByName(TABS.AUDIT_LOG);
 
     if (playersSheet && playersSheet.getLastRow() >= 2) {
-      const pData = playersSheet.getRange(2, 1, playersSheet.getLastRow() - 1, 1).getValues();
+      const pData = playersSheet.getRange(2, 1, playersSheet.getLastRow() - 1, 2).getValues();
       for (let i = 0; i < pData.length; i++) {
-        if (pData[i][0] === playerId) {
+        if (pData[i][0] === playerId && (pData[i][1] === targetLeagueId || !pData[i][1] || targetLeagueId === "league-main")) {
           playersSheet.getRange(i + 2, 10).setValue("UNSOLD");
           playersSheet.getRange(i + 2, 13).setValue(new Date().toISOString());
           break;
@@ -735,16 +884,24 @@ function handleHammerUnsold(ss, data) {
     }
 
     if (stateSheet && stateSheet.getLastRow() >= 2) {
-      const version = (Number(stateSheet.getRange(2, 15).getValue()) || 1) + 1;
-      stateSheet.getRange(2, 15).setValue(version);
-      stateSheet.getRange(2, 16).setValue(new Date().toISOString());
+      let stateRowIndex = 2;
+      const existingStates = stateSheet.getRange(2, 2, stateSheet.getLastRow() - 1, 1).getValues();
+      for (let i = 0; i < existingStates.length; i++) {
+        if (existingStates[i][0] === targetLeagueId || (targetLeagueId === "league-main" && (!existingStates[i][0] || existingStates[i][0] === "league-main"))) {
+          stateRowIndex = i + 2;
+          break;
+        }
+      }
+      const version = (Number(stateSheet.getRange(stateRowIndex, 15).getValue()) || 1) + 1;
+      stateSheet.getRange(stateRowIndex, 15).setValue(version);
+      stateSheet.getRange(stateRowIndex, 16).setValue(new Date().toISOString());
       if (announcement) {
-        stateSheet.getRange(2, 21).setValue(JSON.stringify(announcement));
+        stateSheet.getRange(stateRowIndex, 21).setValue(JSON.stringify(announcement));
       }
     }
 
     auditSheet.appendRow([
-      "audit-" + Date.now(), "league-main", "HAMMER_UNSOLD",
+      "audit-" + Date.now(), targetLeagueId, "HAMMER_UNSOLD",
       JSON.stringify({ playerId }), "Admin", new Date().toISOString()
     ]);
 
@@ -761,6 +918,7 @@ function handleUndoAction(ss, data) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
+    const targetLeagueId = (data && data.leagueId) ? String(data.leagueId).trim() : "league-main";
     const stateSheet = ss.getSheetByName(TABS.AUCTION_STATE);
     const playersSheet = ss.getSheetByName(TABS.PLAYERS);
     const teamsSheet = ss.getSheetByName(TABS.TEAMS);
@@ -771,7 +929,18 @@ function handleUndoAction(ss, data) {
       return jsonResponse({ success: false, error: "Auction state not found" }, 400);
     }
 
-    const stateRow = stateSheet.getRange(2, 1, 1, 21).getValues()[0];
+    let stateRowIndex = 2;
+    if (stateSheet.getLastRow() >= 2) {
+      const existingStates = stateSheet.getRange(2, 2, stateSheet.getLastRow() - 1, 1).getValues();
+      for (let i = 0; i < existingStates.length; i++) {
+        if (existingStates[i][0] === targetLeagueId || (targetLeagueId === "league-main" && (!existingStates[i][0] || existingStates[i][0] === "league-main"))) {
+          stateRowIndex = i + 2;
+          break;
+        }
+      }
+    }
+
+    const stateRow = stateSheet.getRange(stateRowIndex, 1, 1, 21).getValues()[0];
     const lastActionType = stateRow[16];
     let lastPayload = {};
     try { lastPayload = JSON.parse(stateRow[17] || "{}"); } catch {}
@@ -784,9 +953,9 @@ function handleUndoAction(ss, data) {
       const { playerId, teamId, amount } = lastPayload;
       // Revert player to ON_AUCTION
       if (playersSheet && playersSheet.getLastRow() >= 2) {
-        const pData = playersSheet.getRange(2, 1, playersSheet.getLastRow() - 1, 1).getValues();
+        const pData = playersSheet.getRange(2, 1, playersSheet.getLastRow() - 1, 2).getValues();
         for (let i = 0; i < pData.length; i++) {
-          if (pData[i][0] === playerId) {
+          if (pData[i][0] === playerId && (pData[i][1] === targetLeagueId || !pData[i][1] || targetLeagueId === "league-main")) {
             playersSheet.getRange(i + 2, 10, 1, 3).setValues([["ON_AUCTION", "", ""]]);
             break;
           }
@@ -795,9 +964,9 @@ function handleUndoAction(ss, data) {
 
       // Revert team purse & squad
       if (teamsSheet && teamsSheet.getLastRow() >= 2) {
-        const tData = teamsSheet.getRange(2, 1, teamsSheet.getLastRow() - 1, 1).getValues();
+        const tData = teamsSheet.getRange(2, 1, teamsSheet.getLastRow() - 1, 2).getValues();
         for (let i = 0; i < tData.length; i++) {
-          if (tData[i][0] === teamId) {
+          if (tData[i][0] === teamId && (tData[i][1] === targetLeagueId || !tData[i][1] || targetLeagueId === "league-main")) {
             const rowVals = teamsSheet.getRange(i + 2, 12, 1, 8).getValues()[0];
             const rem = Number(rowVals[1]) + (amount || 0);
             const spent = Math.max(0, Number(rowVals[2]) - (amount || 0));
@@ -809,20 +978,32 @@ function handleUndoAction(ss, data) {
         }
       }
 
-      // Remove last purchase row
+      // Remove last purchase row for this tournament
       if (purchasesSheet && purchasesSheet.getLastRow() >= 2) {
-        purchasesSheet.deleteRow(purchasesSheet.getLastRow());
+        const purData = purchasesSheet.getRange(2, 2, purchasesSheet.getLastRow() - 1, 1).getValues();
+        for (let i = purData.length - 1; i >= 0; i--) {
+          if (purData[i][0] === targetLeagueId || (targetLeagueId === "league-main" && !purData[i][0])) {
+            purchasesSheet.deleteRow(i + 2);
+            break;
+          }
+        }
       }
     } else if (lastActionType === "PLACE_BID") {
       if (bidsSheet && bidsSheet.getLastRow() >= 2) {
-        bidsSheet.deleteRow(bidsSheet.getLastRow());
+        const bData = bidsSheet.getRange(2, 2, bidsSheet.getLastRow() - 1, 1).getValues();
+        for (let i = bData.length - 1; i >= 0; i--) {
+          if (bData[i][0] === targetLeagueId || (targetLeagueId === "league-main" && !bData[i][0])) {
+            bidsSheet.deleteRow(i + 2);
+            break;
+          }
+        }
       }
     }
 
     const version = (Number(stateRow[14]) || 1) + 1;
-    stateSheet.getRange(2, 15).setValue(version);
-    stateSheet.getRange(2, 16).setValue(new Date().toISOString());
-    stateSheet.getRange(2, 17, 1, 2).setValues([["", "{}"]]);
+    stateSheet.getRange(stateRowIndex, 15).setValue(version);
+    stateSheet.getRange(stateRowIndex, 16).setValue(new Date().toISOString());
+    stateSheet.getRange(stateRowIndex, 17, 1, 2).setValues([["", "{}"]]);
 
     return jsonResponse({ success: true, message: "Last action successfully undone." });
   } finally {
@@ -843,10 +1024,11 @@ function handleSaveAuctionState(ss, payload) {
     }
 
     const stateData = (payload && payload.state) ? payload.state : (payload || {});
+    const targetLeagueId = stateData.seasonId || (payload && payload.leagueId) || "league-main";
 
     const row = [
-      stateData.id || "auction-main",
-      stateData.seasonId || "league-main",
+      stateData.id || ("auction-" + targetLeagueId),
+      targetLeagueId,
       stateData.status || "IDLE",
       stateData.currentPlayerId || "",
       stateData.currentHighestBid || 0,
@@ -868,23 +1050,38 @@ function handleSaveAuctionState(ss, payload) {
       stateData.announcementJson || ""
     ];
 
+    let foundStateRow = -1;
     if (stateSheet.getLastRow() >= 2) {
-      stateSheet.getRange(2, 1, 1, 21).setValues([row]);
-    } else {
-      stateSheet.getRange(2, 1, 1, 21).setValues([row]);
+      const existingStates = stateSheet.getRange(2, 2, stateSheet.getLastRow() - 1, 1).getValues();
+      for (let i = 0; i < existingStates.length; i++) {
+        if (existingStates[i][0] === targetLeagueId || (targetLeagueId === "league-main" && (!existingStates[i][0] || existingStates[i][0] === "league-main"))) {
+          foundStateRow = i + 2;
+          break;
+        }
+      }
     }
 
-    // Persist updated teams if included
-    if (payload && Array.isArray(payload.teams) && payload.teams.length > 0) {
+    if (foundStateRow > 0) {
+      stateSheet.getRange(foundStateRow, 1, 1, 21).setValues([row]);
+    } else {
+      stateSheet.appendRow(row);
+    }
+
+    // Persist updated teams if included, preserving other tournaments
+    if (payload && Array.isArray(payload.teams)) {
       const teamsSheet = ensureSheet(ss, TABS.TEAMS, [
         "id", "seasonId", "name", "shortCode", "logoUrl", "primaryColor", "secondaryColor",
         "ownerName", "ownerPhotoUrl", "iconPlayerName", "iconPlayerPhotoUrl",
         "totalPurse", "remainingPurse", "spentPurse", "minPlayers", "maxPlayers", "reservedPurse",
         "squadCount", "isCompleted", "updatedAt"
       ]);
+
+      let preservedTeamRows = [];
       if (teamsSheet.getLastRow() >= 2) {
-        teamsSheet.getRange(2, 1, teamsSheet.getLastRow() - 1, 20).clearContent();
+        const existingTeams = teamsSheet.getRange(2, 1, teamsSheet.getLastRow() - 1, 20).getValues();
+        preservedTeamRows = existingTeams.filter(r => (r[1] || "league-main") !== targetLeagueId);
       }
+
       const teamRows = payload.teams.map(t => {
         const totalPurse = t.purse?.totalBudget ?? t.purse?.totalPurse ?? 100000;
         const remainingPurse = t.purse?.remainingAmount ?? totalPurse;
@@ -893,35 +1090,53 @@ function handleSaveAuctionState(ss, payload) {
         const maxPlayers = t.purse?.maxPlayers ?? 8;
         const reservedPurse = t.purse?.reservedForSquad ?? t.purse?.reservedPurse ?? 0;
         return [
-          t.id, t.seasonId || "league-main", t.name, t.shortCode || t.name.substring(0, 3).toUpperCase(),
+          t.id, targetLeagueId, t.name, t.shortCode || t.name.substring(0, 3).toUpperCase(),
           t.logoUrl || "", t.primaryColor || "#059669", t.secondaryColor || "#F59E0B",
           t.ownerName || "", t.ownerPhotoUrl || "", t.iconPlayerName || "", t.iconPlayerPhotoUrl || "",
           totalPurse, remainingPurse, spentPurse, minPlayers, maxPlayers, reservedPurse,
           t.squadCount || 0, t.isCompleted ? "TRUE" : "FALSE", new Date().toISOString()
         ];
       });
-      teamsSheet.getRange(2, 1, teamRows.length, 20).setValues(teamRows);
+
+      const combinedTeams = preservedTeamRows.concat(teamRows);
+      if (teamsSheet.getLastRow() >= 2) {
+        teamsSheet.getRange(2, 1, teamsSheet.getLastRow() - 1, 20).clearContent();
+      }
+      if (combinedTeams.length > 0) {
+        teamsSheet.getRange(2, 1, combinedTeams.length, 20).setValues(combinedTeams);
+      }
     }
 
-    // Persist updated players if included
-    if (payload && Array.isArray(payload.players) && payload.players.length > 0) {
+    // Persist updated players if included, preserving other tournaments
+    if (payload && Array.isArray(payload.players)) {
       const playersSheet = ensureSheet(ss, TABS.PLAYERS, [
         "id", "seasonId", "name", "category", "primaryRole", "battingStyle", "bowlingStyle",
         "photoUrl", "basePrice", "status", "teamId", "soldPrice", "soldTime",
         "isIcon", "sortOrder", "updatedAt"
       ]);
+
+      let preservedPlayerRows = [];
       if (playersSheet.getLastRow() >= 2) {
-        playersSheet.getRange(2, 1, playersSheet.getLastRow() - 1, 16).clearContent();
+        const existingPlayers = playersSheet.getRange(2, 1, playersSheet.getLastRow() - 1, 16).getValues();
+        preservedPlayerRows = existingPlayers.filter(r => (r[1] || "league-main") !== targetLeagueId);
       }
+
       const playerRows = payload.players.map((p, idx) => [
-        p.id, p.seasonId || "league-main", p.fullName || p.name,
-        p.category || "SILVER", p.primaryRole || "ALL_ROUNDER",
-        p.battingStyle || "Right-Hand Bat", p.bowlingStyle || "Right-Arm Medium",
-        p.photoUrl || "", Number(p.basePrice) || 2000, p.status || "AVAILABLE",
+        p.id, targetLeagueId, p.fullName || p.name,
+        p.category || "", p.primaryRole || "",
+        p.battingStyle || "", p.bowlingStyle || "",
+        p.photoUrl || "", p.basePrice != null && p.basePrice > 0 ? Number(p.basePrice) : "", p.status || "AVAILABLE",
         p.soldToTeamId || p.teamId || "", p.soldPrice || "", p.soldTime || "",
         p.isIcon ? "TRUE" : "FALSE", p.sortOrder || (idx + 1), new Date().toISOString()
       ]);
-      playersSheet.getRange(2, 1, playerRows.length, 16).setValues(playerRows);
+
+      const combinedPlayers = preservedPlayerRows.concat(playerRows);
+      if (playersSheet.getLastRow() >= 2) {
+        playersSheet.getRange(2, 1, playersSheet.getLastRow() - 1, 16).clearContent();
+      }
+      if (combinedPlayers.length > 0) {
+        playersSheet.getRange(2, 1, combinedPlayers.length, 16).setValues(combinedPlayers);
+      }
     }
 
     // Persist new bid if included
@@ -932,7 +1147,7 @@ function handleSaveAuctionState(ss, payload) {
       const b = payload.newBid;
       bidsSheet.appendRow([
         b.id || ("bid-" + Date.now()),
-        b.seasonId || "league-main",
+        b.seasonId || targetLeagueId,
         b.playerId || "",
         b.teamId || "",
         b.amount || 0,
@@ -950,7 +1165,7 @@ function handleSaveAuctionState(ss, payload) {
       const p = payload.newPurchase;
       purchasesSheet.appendRow([
         p.id || ("pur-" + Date.now()),
-        p.seasonId || "league-main",
+        p.seasonId || targetLeagueId,
         p.teamId || "",
         p.playerId || "",
         p.soldPrice || p.amount || 0,
@@ -967,7 +1182,7 @@ function handleSaveAuctionState(ss, payload) {
       const a = payload.auditEntry;
       auditSheet.appendRow([
         a.id || ("audit-" + Date.now()),
-        a.seasonId || "league-main",
+        a.seasonId || targetLeagueId,
         a.actionType || a.action || "AUCTION_ACTION",
         a.detailsJson || a.details || "{}",
         a.actor || "AUCTIONEER",
@@ -988,6 +1203,7 @@ function handleResetAuction(ss, data) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
+    const targetLeagueId = (data && data.leagueId) ? String(data.leagueId).trim() : "league-main";
     const playersSheet = ss.getSheetByName(TABS.PLAYERS);
     const teamsSheet = ss.getSheetByName(TABS.TEAMS);
     const stateSheet = ss.getSheetByName(TABS.AUCTION_STATE);
@@ -995,50 +1211,73 @@ function handleResetAuction(ss, data) {
     const purchasesSheet = ss.getSheetByName(TABS.PURCHASES);
     const auditSheet = ss.getSheetByName(TABS.AUDIT_LOG);
 
-    // Reset all players to AVAILABLE
+    // Reset players for targetLeagueId to AVAILABLE
+    let firstPlayerId = "";
     if (playersSheet && playersSheet.getLastRow() >= 2) {
-      const numPlayers = playersSheet.getLastRow() - 1;
-      for (let i = 0; i < numPlayers; i++) {
-        playersSheet.getRange(i + 2, 10, 1, 4).setValues([["AVAILABLE", "", "", ""]]);
+      const pRows = playersSheet.getRange(2, 1, playersSheet.getLastRow() - 1, 16).getValues();
+      for (let i = 0; i < pRows.length; i++) {
+        if ((pRows[i][1] || "league-main") === targetLeagueId) {
+          if (!firstPlayerId) firstPlayerId = pRows[i][0];
+          playersSheet.getRange(i + 2, 10, 1, 4).setValues([["AVAILABLE", "", "", ""]]);
+        }
       }
     }
 
-    // Reset each team's remaining purse to its total purse
+    // Reset teams for targetLeagueId
     if (teamsSheet && teamsSheet.getLastRow() >= 2) {
-      const numTeams = teamsSheet.getLastRow() - 1;
-      for (let i = 0; i < numTeams; i++) {
-        const totalPurse = Number(teamsSheet.getRange(i + 2, 12).getValue()) || 100000;
-        teamsSheet.getRange(i + 2, 13, 1, 2).setValues([[totalPurse, 0]]);
-        teamsSheet.getRange(i + 2, 18, 1, 2).setValues([[0, "FALSE"]]);
+      const tRows = teamsSheet.getRange(2, 1, teamsSheet.getLastRow() - 1, 20).getValues();
+      for (let i = 0; i < tRows.length; i++) {
+        if ((tRows[i][1] || "league-main") === targetLeagueId) {
+          const totalPurse = Number(tRows[i][11]) || 100000;
+          teamsSheet.getRange(i + 2, 13, 1, 2).setValues([[totalPurse, 0]]);
+          teamsSheet.getRange(i + 2, 18, 1, 2).setValues([[0, "FALSE"]]);
+        }
       }
     }
 
-    // Clear bids & purchases
+    // Preserve bids from other tournaments
     if (bidsSheet && bidsSheet.getLastRow() >= 2) {
+      const bRows = bidsSheet.getRange(2, 1, bidsSheet.getLastRow() - 1, bidsSheet.getLastColumn()).getValues();
+      const preservedBids = bRows.filter(r => (r[1] || "league-main") !== targetLeagueId);
       bidsSheet.getRange(2, 1, bidsSheet.getLastRow() - 1, bidsSheet.getLastColumn()).clearContent();
-    }
-    if (purchasesSheet && purchasesSheet.getLastRow() >= 2) {
-      purchasesSheet.getRange(2, 1, purchasesSheet.getLastRow() - 1, purchasesSheet.getLastColumn()).clearContent();
+      if (preservedBids.length > 0) {
+        bidsSheet.getRange(2, 1, preservedBids.length, bidsSheet.getLastColumn()).setValues(preservedBids);
+      }
     }
 
-    // Reset state
+    // Preserve purchases from other tournaments
+    if (purchasesSheet && purchasesSheet.getLastRow() >= 2) {
+      const purRows = purchasesSheet.getRange(2, 1, purchasesSheet.getLastRow() - 1, purchasesSheet.getLastColumn()).getValues();
+      const preservedPurchases = purRows.filter(r => (r[1] || "league-main") !== targetLeagueId);
+      purchasesSheet.getRange(2, 1, purchasesSheet.getLastRow() - 1, purchasesSheet.getLastColumn()).clearContent();
+      if (preservedPurchases.length > 0) {
+        purchasesSheet.getRange(2, 1, preservedPurchases.length, purchasesSheet.getLastColumn()).setValues(preservedPurchases);
+      }
+    }
+
+    // Reset state for targetLeagueId
     if (stateSheet && stateSheet.getLastRow() >= 2) {
-      const firstPlayerId = (playersSheet && playersSheet.getLastRow() >= 2)
-        ? playersSheet.getRange(2, 1).getValue()
-        : "";
-      stateSheet.getRange(2, 1, 1, 21).setValues([[
-        "auction-main", "league-main", "IDLE", firstPlayerId, 0, "", 45,
+      let stateRowIndex = 2;
+      const existingStates = stateSheet.getRange(2, 2, stateSheet.getLastRow() - 1, 1).getValues();
+      for (let i = 0; i < existingStates.length; i++) {
+        if (existingStates[i][0] === targetLeagueId || (targetLeagueId === "league-main" && (!existingStates[i][0] || existingStates[i][0] === "league-main"))) {
+          stateRowIndex = i + 2;
+          break;
+        }
+      }
+      stateSheet.getRange(stateRowIndex, 1, 1, 21).setValues([[
+        "auction-" + targetLeagueId, targetLeagueId, "IDLE", firstPlayerId, 0, "", 45,
         "", 1, "MAIN", "[]", "FALSE", 0, 10, 1,
         new Date().toISOString(), "RESET", "{}", "{}", "", ""
       ]]);
     }
 
     auditSheet.appendRow([
-      "audit-" + Date.now(), "league-main", "RESET_AUCTION",
-      "Full auction reset to IDLE", "Admin", new Date().toISOString()
+      "audit-" + Date.now(), targetLeagueId, "RESET_AUCTION",
+      "Tournament auction reset to IDLE", "Admin", new Date().toISOString()
     ]);
 
-    return jsonResponse({ success: true, message: "Auction completely reset to initial state." });
+    return jsonResponse({ success: true, message: "Tournament auction reset to initial state." });
   } finally {
     lock.releaseLock();
   }

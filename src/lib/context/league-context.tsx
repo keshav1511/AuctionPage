@@ -1,21 +1,38 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { League, BrandingPalette, Team, Player, AuctionRules } from "@/types";
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from "react";
+import { League, BrandingPalette, Team, Player, AuctionRules, TournamentSummary } from "@/types";
 import { generateSportsBrandingPalette } from "@/lib/branding/theme-generator";
 
 import { INITIAL_LEAGUES, DEFAULT_LEAGUE_ID } from "@/lib/mock-data/leagues";
 import { NTL_TEAMS, NTL_PLAYERS, NTL_DEFAULT_RULES, NTL_DEFAULT_LEAGUE } from "@/config/ntl-season-1";
 export { INITIAL_LEAGUES, DEFAULT_LEAGUE_ID };
 
-interface LeagueContextType {
+export interface LeagueContextType {
   activeLeague: League;
   leagues: League[];
+  tournaments: TournamentSummary[];
   teams: Team[];
   players: Player[];
   auctionRules: AuctionRules;
-  switchLeague: (leagueId: string) => void;
+  refreshTournaments: () => Promise<void>;
+  switchLeague: (
+    leagueId: string,
+    force?: boolean
+  ) => Promise<{ success: boolean; requiresConfirmation?: boolean; message?: string }>;
   createLeague: (newLeague: Omit<League, "id">) => League;
+  createNewTournament: (data: {
+    name: string;
+    edition?: string | number;
+    description?: string;
+    logoUrl?: string;
+    minSquadSize?: number;
+    maxSquadSize?: number;
+    totalPurse?: number;
+    defaultBasePrice?: number;
+    primaryColor?: string;
+    secondaryColor?: string;
+  }) => Promise<TournamentSummary>;
   updateLeague: (leagueId: string, updates: Partial<League>) => void;
   updateLeaguePalette: (leagueId: string, palette: BrandingPalette) => void;
   addTeam: (team: Team) => void;
@@ -34,23 +51,67 @@ const STORAGE_KEY = "ntl_auction_active_league_id";
 
 export function LeagueProvider({ children }: { children: ReactNode }) {
   const [leagues, setLeagues] = useState<League[]>(INITIAL_LEAGUES);
+  const [tournaments, setTournaments] = useState<TournamentSummary[]>([]);
   const [activeLeagueId, setActiveLeagueId] = useState<string>(NTL_DEFAULT_LEAGUE.id);
 
   const [teams, setTeams] = useState<Team[]>(NTL_TEAMS);
   const [players, setPlayers] = useState<Player[]>(NTL_PLAYERS);
   const [auctionRules, setAuctionRules] = useState<AuctionRules>(NTL_DEFAULT_RULES);
 
-  // Load active league ID preference on mount
+  // Fetch all tournament summaries
+  const refreshTournaments = useCallback(async () => {
+    try {
+      const res = await fetch("/api/tournaments");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.tournaments)) {
+          setTournaments(data.tournaments);
+
+          // Update leagues list with discovered tournaments
+          setLeagues((prev) => {
+            const next = [...prev];
+            for (const t of data.tournaments) {
+              const idx = next.findIndex((l) => l.id === t.id);
+              const mappedLeague: League = {
+                id: t.id,
+                name: t.name,
+                slug: t.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+                edition: t.edition || t.season,
+                description: t.description || "",
+                logoUrl: t.logoUrl || "",
+                primaryColor: (idx >= 0 && next[idx].primaryColor) || "#059669",
+                secondaryColor: (idx >= 0 && next[idx].secondaryColor) || "#38bdf8",
+                status: t.status,
+                created_at: t.updatedAt,
+              };
+
+              if (idx >= 0) {
+                next[idx] = { ...next[idx], ...mappedLeague };
+              } else {
+                next.push(mappedLeague);
+              }
+            }
+            return next;
+          });
+        }
+      }
+    } catch (err) {
+      console.warn("[LeagueContext] Failed to load tournaments:", err);
+    }
+  }, []);
+
+  // Load active league ID preference and tournament list on mount
   useEffect(() => {
     try {
       const storedId = localStorage.getItem(STORAGE_KEY);
-      if (storedId && INITIAL_LEAGUES.some((l) => l.id === storedId)) {
+      if (storedId) {
         setActiveLeagueId(storedId);
       }
     } catch {
       // Local storage unavailable
     }
-  }, []);
+    refreshTournaments();
+  }, [refreshTournaments]);
 
   // Fetch authoritative state from server (backed by Google Sheets) whenever activeLeagueId changes
   useEffect(() => {
@@ -85,12 +146,12 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
     };
   }, [activeLeagueId]);
 
-  const activeLeague = leagues.find((l) => l.id === activeLeagueId) || leagues[0];
+  const activeLeague = leagues.find((l) => l.id === activeLeagueId) || leagues[0] || NTL_DEFAULT_LEAGUE;
 
   // Apply CSS variables to document root for real-time dynamic branding
   useEffect(() => {
-    if (typeof document === "undefined") return;
-    const p = activeLeague.brandingPalette || generateSportsBrandingPalette(activeLeague.primaryColor);
+    if (typeof document === "undefined" || !activeLeague) return;
+    const p = activeLeague.brandingPalette || generateSportsBrandingPalette(activeLeague.primaryColor || "#059669");
     const root = document.documentElement;
 
     root.style.setProperty("--league-primary", p.primary);
@@ -121,14 +182,111 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
     }
   }, [activeLeague]);
 
-  const switchLeague = (leagueId: string) => {
-    const target = leagues.find((l) => l.id === leagueId);
-    if (target) {
+  const switchLeague = async (
+    leagueId: string,
+    force: boolean = false
+  ): Promise<{ success: boolean; requiresConfirmation?: boolean; message?: string }> => {
+    try {
+      const res = await fetch("/api/tournaments/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tournamentId: leagueId,
+          currentTournamentId: activeLeagueId,
+          force,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        if (data.requiresConfirmation) {
+          return {
+            success: false,
+            requiresConfirmation: true,
+            message: data.message,
+          };
+        }
+        return {
+          success: false,
+          message: data.error || "Failed to switch tournament.",
+        };
+      }
+
       setActiveLeagueId(leagueId);
       try {
         localStorage.setItem(STORAGE_KEY, leagueId);
       } catch {}
+
+      return { success: true };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Fallback local switch if network fails
+      setActiveLeagueId(leagueId);
+      try {
+        localStorage.setItem(STORAGE_KEY, leagueId);
+      } catch {}
+      return { success: true, message };
     }
+  };
+
+  const createNewTournament = async (data: {
+    name: string;
+    edition?: string | number;
+    description?: string;
+    logoUrl?: string;
+    minSquadSize?: number;
+    maxSquadSize?: number;
+    totalPurse?: number;
+    defaultBasePrice?: number;
+    primaryColor?: string;
+    secondaryColor?: string;
+  }): Promise<TournamentSummary> => {
+    const res = await fetch("/api/tournaments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+
+    const result = await res.json();
+    if (!res.ok || !result.success) {
+      throw new Error(result.error || "Failed to create tournament.");
+    }
+
+    const newTourney: TournamentSummary = result.tournament;
+
+    // Immediately update local state
+    setTournaments((prev) => [...prev, newTourney]);
+
+    const newLeague: League = {
+      id: newTourney.id,
+      name: newTourney.name,
+      slug: newTourney.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+      edition: newTourney.edition || newTourney.season,
+      description: newTourney.description || "",
+      logoUrl: newTourney.logoUrl || "",
+      primaryColor: data.primaryColor || "#059669",
+      secondaryColor: data.secondaryColor || "#38bdf8",
+      status: "IDLE",
+      created_at: newTourney.updatedAt,
+    };
+
+    setLeagues((prev) => [...prev, newLeague]);
+    setActiveLeagueId(newTourney.id);
+    setTeams([]);
+    setPlayers([]);
+    setAuctionRules({
+      ...NTL_DEFAULT_RULES,
+      totalPurse: newTourney.totalPurse || 100000,
+      minimumSquadSize: newTourney.minSquadSize || 8,
+      maximumSquadSize: newTourney.maxSquadSize || 8,
+      basePrice: newTourney.defaultBasePrice || 2000,
+    });
+
+    try {
+      localStorage.setItem(STORAGE_KEY, newTourney.id);
+    } catch {}
+
+    return newTourney;
   };
 
   const createLeague = (newLeagueData: Omit<League, "id">): League => {
@@ -242,11 +400,14 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
       value={{
         activeLeague,
         leagues,
+        tournaments,
         teams,
         players,
         auctionRules,
+        refreshTournaments,
         switchLeague,
         createLeague,
+        createNewTournament,
         updateLeague,
         updateLeaguePalette,
         addTeam,
@@ -271,4 +432,3 @@ export function useLeague() {
   }
   return context;
 }
-

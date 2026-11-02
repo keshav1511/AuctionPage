@@ -274,16 +274,16 @@ export function serializePlayer(player: Player): string[] {
     player.registrationNo || "",
     player.fullName || "",
     player.category || "",
-    player.primaryRole || "BATSMAN",
-    player.battingStyle || "Right Hand Bat",
-    player.bowlingStyle || "Right Arm Medium",
+    player.primaryRole || "",
+    player.battingStyle || "",
+    player.bowlingStyle || "",
     player.photoUrl || "",
     player.originalPhotoUrl || "",
     player.normalizedPhotoUrl || "",
     player.photoAspectRatio || "3:4",
     player.photoMatchStatus || "UNMATCHED",
     player.driveFileId || "",
-    String(player.basePrice || 25000),
+    player.basePrice != null && player.basePrice > 0 ? String(player.basePrice) : "",
     player.basePriceOverride != null ? String(player.basePriceOverride) : "",
     player.status || "AVAILABLE",
     String(player.sortOrder || 0),
@@ -308,16 +308,16 @@ export function deserializePlayer(row: (string | undefined)[]): Player | null {
     registrationNo: row[2] || "",
     fullName: row[3] || "",
     category: (row[4] as PlayerCategory) || undefined,
-    primaryRole: (row[5] as PlayerRole) || "BATSMAN",
-    battingStyle: row[6] || "Right Hand Bat",
-    bowlingStyle: row[7] || "Right Arm Medium",
+    primaryRole: (row[5] as PlayerRole) || "",
+    battingStyle: row[6] || "",
+    bowlingStyle: row[7] || "",
     photoUrl: row[8] || "",
     originalPhotoUrl: row[9] || "",
     normalizedPhotoUrl: row[10] || "",
     photoAspectRatio: row[11] || "3:4",
     photoMatchStatus: (row[12] as PhotoMatchStatus) || "UNMATCHED",
     driveFileId: row[13] || "",
-    basePrice: Number(row[14]) || 25000,
+    basePrice: row[14] ? Number(row[14]) : 0,
     basePriceOverride: row[15] ? Number(row[15]) : undefined,
     status: (row[16] as PlayerStatus) || "AVAILABLE",
     sortOrder: Number(row[17]) || 0,
@@ -504,7 +504,7 @@ export interface PurchaseRecord {
   playerId: string;
   playerName: string;
   playerCategory?: PlayerCategory;
-  playerRole: PlayerRole;
+  playerRole?: PlayerRole | "";
   teamId: string;
   teamName: string;
   soldPrice: number;
@@ -519,7 +519,7 @@ export function serializePurchase(purchase: PurchaseRecord): string[] {
     purchase.playerId || "",
     purchase.playerName || "",
     purchase.playerCategory || "",
-    purchase.playerRole || "BATSMAN",
+    purchase.playerRole || "",
     purchase.teamId || "",
     purchase.teamName || "",
     String(purchase.soldPrice || 0),
@@ -537,7 +537,7 @@ export function deserializePurchase(row: (string | undefined)[]): PurchaseRecord
     playerId: row[2] || "",
     playerName: row[3] || "",
     playerCategory: (row[4] as PlayerCategory) || undefined,
-    playerRole: (row[5] as PlayerRole) || "BATSMAN",
+    playerRole: (row[5] as PlayerRole) || "",
     teamId: row[6] || "",
     teamName: row[7] || "",
     soldPrice: Number(row[8]) || 0,
