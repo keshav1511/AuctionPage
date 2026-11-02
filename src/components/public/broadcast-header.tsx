@@ -51,12 +51,20 @@ export function BroadcastHeader() {
           <ArrowLeft className="w-4 h-4" />
         </Link>
         <div className="flex items-center gap-3">
-          <div
-            className="w-9 h-9 rounded-lg flex items-center justify-center font-black text-white text-base shadow-lg border border-white/20"
-            style={{ backgroundColor: activeLeague.primaryColor }}
-          >
-            {activeLeague.name.charAt(0)}
-          </div>
+          {activeLeague.logoUrl ? (
+            <img
+              src={activeLeague.logoUrl}
+              alt={activeLeague.name}
+              className="w-9 h-9 object-contain rounded-lg shadow-lg border border-white/20 bg-slate-900 p-0.5"
+            />
+          ) : (
+            <div
+              className="w-9 h-9 rounded-lg flex items-center justify-center font-black text-white text-base shadow-lg border border-white/20"
+              style={{ backgroundColor: activeLeague.primaryColor }}
+            >
+              {activeLeague.name.charAt(0)}
+            </div>
+          )}
           <div>
             <h1 className="text-white font-black text-sm lg:text-base tracking-wider uppercase flex items-center gap-2">
               {activeLeague.name}

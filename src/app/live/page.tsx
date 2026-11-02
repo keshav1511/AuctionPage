@@ -5,20 +5,18 @@ import Image from "next/image";
 import confetti from "canvas-confetti";
 import { BroadcastHeader } from "@/components/public/broadcast-header";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import {
   formatCurrency,
   formatRole,
   getRoleBadgeColor,
 } from "@/lib/utils";
-import { getTeamParticipantCounts, formatTeamParticipantBreakdown } from "@/lib/auction/team-size-calculator";
+import { LiveTeamDashboard } from "@/components/live/live-team-dashboard";
 import { useLeague } from "@/lib/context/league-context";
 import { useRealtimeAuction } from "@/lib/hooks/use-realtime-auction";
 import {
   TrendingUp,
   Award,
   Sparkles,
-  Zap,
   Radio,
   Users,
   Coins,
@@ -33,6 +31,7 @@ export default function LiveAuctionStage() {
     session,
     teams: liveTeams,
     players: livePlayers,
+    rules: liveRules,
     isConnected,
     remainingSeconds,
     isHammered,
@@ -920,97 +919,74 @@ export default function LiveAuctionStage() {
           </div>
         </div>
 
-        {/* Bottom Section: Franchise Purse Scoreboard & Live Bid Log */}
-        <div className="mt-8 grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Team Purse Grid (All 6 Franchises) */}
-          <div className="lg:col-span-8 bg-charcoal-900/80 rounded-2xl border border-slate-800 p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-black text-white text-sm uppercase tracking-wider flex items-center gap-2">
-                <Zap className="w-4 h-4 text-emerald-400" /> Franchise Purse Scoreboard
+        {/* SECTION 2: Live Team Dashboard (Four Team Cards directly below central auction stage) */}
+        <LiveTeamDashboard
+          teams={liveTeams}
+          players={livePlayers}
+          session={session}
+          rules={liveRules}
+        />
+
+        {/* SECTION 3: Live Activity & Recent Bid Transactions */}
+        <div className="mt-8 bg-charcoal-900/90 rounded-2xl border border-slate-800 p-6 shadow-xl backdrop-blur-md">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-black text-white text-base uppercase tracking-wider flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-amber-400" />
+                Live Auction Activity & Recent Bids
               </h3>
-              <span className="text-xs text-slate-400">Budget Cap: {formatCurrency(liveTeams[0]?.purse?.totalBudget || 100000)} / Team</span>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Real-time competitive bid transactions and hammer resolutions across all franchises
+              </p>
             </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {liveTeams.map((t) => {
-                const percentSpent = (t.purse.spentAmount / t.purse.totalBudget) * 100;
-                const isLeading = t.id === leadingTeam.id;
-                const teamSoldPlayers = livePlayers.filter(
-                  (p) => p.status === "SOLD" && p.soldToTeamId === t.id
-                );
-                const counts = getTeamParticipantCounts(t, teamSoldPlayers.length);
-
-                return (
-                  <div
-                    key={t.id}
-                    className={`p-3.5 rounded-xl border transition-all ${
-                      isLeading
-                        ? "bg-amber-500/10 border-amber-500/50 shadow-lg shadow-amber-500/5"
-                        : "bg-charcoal-950/70 border-slate-800"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1.5">
-                      <div className="flex items-center gap-2">
-                        <span className="font-black text-xs text-white">{t.shortCode}</span>
-                        <span className="text-[11px] text-slate-400 truncate max-w-[100px]">
-                          {t.name}
-                        </span>
-                      </div>
-                      <span
-                        className="text-[10px] font-mono text-slate-400"
-                        title={formatTeamParticipantBreakdown(counts)}
-                      >
-                        {counts.totalParticipants}/{t.purse.minPlayers || 8}
-                      </span>
-                    </div>
-
-                    <div className="flex items-baseline justify-between text-xs mb-2">
-                      <span className="text-[10px] text-slate-500 uppercase">Purse Left</span>
-                      <span className="font-mono font-bold text-emerald-400">
-                        {formatCurrency(t.purse.remainingAmount, true)}
-                      </span>
-                    </div>
-
-                    <Progress
-                      value={percentSpent}
-                      className="h-1.5 bg-slate-800"
-                      indicatorClassName={isLeading ? "bg-amber-400" : "bg-emerald-500"}
-                    />
-                  </div>
-                );
-              })}
+            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-charcoal-950 border border-slate-800">
+              <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-emerald-400 animate-ping" : "bg-amber-400"}`} />
+              <span className={`text-[11px] font-mono font-semibold ${isConnected ? "text-emerald-400" : "text-amber-400"}`}>
+                {isConnected ? "LIVE SYNCHRONIZED" : "CONNECTING..."}
+              </span>
             </div>
           </div>
 
-          {/* Recent Bids Feed */}
-          <div className="lg:col-span-4 bg-charcoal-900/80 rounded-2xl border border-slate-800 p-6 flex flex-col justify-between">
-            <h3 className="font-black text-white text-sm uppercase tracking-wider mb-4 flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-amber-400" /> Recent Bid Transactions
-            </h3>
-
-            <div className="space-y-2.5 overflow-y-auto max-h-[160px] pr-1">
-              {session.recentBids.map((b, idx) => (
+          {session.recentBids && session.recentBids.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {session.recentBids.slice(0, 8).map((b, idx) => (
                 <div
-                  key={b.id}
-                  className="flex items-center justify-between p-2.5 rounded-lg bg-charcoal-950 border border-slate-800 text-xs"
+                  key={b.id || idx}
+                  className="flex items-center justify-between p-3 rounded-xl bg-charcoal-950/80 border border-slate-800 text-xs hover:border-slate-700 transition-colors"
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="w-5 h-5 rounded bg-slate-800 flex items-center justify-center font-bold text-[10px] text-amber-400">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="w-6 h-6 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center font-mono font-bold text-xs text-amber-400 shrink-0">
                       {idx + 1}
                     </span>
-                    <span className="font-bold text-white">{b.teamName}</span>
+                    <div className="min-w-0">
+                      <span className="font-bold text-white block truncate" title={b.teamName}>
+                        {b.teamName}
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        {b.placedAt
+                          ? new Date(b.placedAt).toLocaleTimeString("en-IN", {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              second: "2-digit",
+                            })
+                          : "Standing Bid"}
+                      </span>
+                    </div>
                   </div>
-                  <span className="font-mono font-bold text-emerald-400">
+                  <span className="font-mono font-black text-emerald-400 text-sm shrink-0">
                     {formatCurrency(b.amount)}
                   </span>
                 </div>
               ))}
             </div>
-
-            <p className="text-[10px] text-center text-slate-500 mt-3">
-              Real-time WebSockets synchronization active
-            </p>
-          </div>
+          ) : (
+            <div className="py-6 px-4 rounded-xl bg-charcoal-950/40 border border-dashed border-slate-800 text-center">
+              <p className="text-xs text-slate-400 font-medium">Awaiting opening bid transactions for this lot</p>
+              <span className="text-[10px] text-slate-600 block mt-0.5">
+                Competitive bids submitted by franchises will stream live here
+              </span>
+            </div>
+          )}
         </div>
       </main>
       </div>

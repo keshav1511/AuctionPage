@@ -100,6 +100,25 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
     root.style.setProperty("--league-card", p.card);
     root.style.setProperty("--league-border", p.border);
     root.style.setProperty("--league-text", p.text);
+
+    // Dynamic browser tab favicon
+    if (activeLeague.logoUrl) {
+      let iconLink = document.querySelector<HTMLLinkElement>("link[rel*='icon']");
+      if (!iconLink) {
+        iconLink = document.createElement("link");
+        iconLink.rel = "shortcut icon";
+        document.head.appendChild(iconLink);
+      }
+      iconLink.href = activeLeague.logoUrl;
+    }
+
+    // Dynamic browser tab title
+    if (activeLeague.name) {
+      const currentTitle = document.title;
+      if (!currentTitle || currentTitle.includes("NTL") || currentTitle.includes("Auction") || currentTitle.includes("Premier")) {
+        document.title = `${activeLeague.name} — Live Cricket Auction`;
+      }
+    }
   }, [activeLeague]);
 
   const switchLeague = (leagueId: string) => {
