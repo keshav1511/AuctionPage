@@ -10,7 +10,8 @@
     "lint": "next lint",
     "type-check": "tsc --noEmit",
     "import:assets": "node scripts/import-auction-assets.mjs",
-    "import:sheets-export": "node scripts/import-sheets-export.mjs"
+    "import:sheets-export": "node scripts/import-sheets-export.mjs",
+    "restore:original-roster": "node scripts/restore-original-roster.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
