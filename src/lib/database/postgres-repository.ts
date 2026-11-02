@@ -38,7 +38,27 @@ async function ensureLeague(leagueId: string, client?: PoolClient) {
   }
 }
 async function rows<T>(table: "auction_teams" | "auction_players", leagueId: string, client?: PoolClient): Promise<T[]> { await ensureLeague(leagueId, client); const result = await (client || db()).query(`SELECT data FROM ${table} WHERE league_id=$1 ORDER BY id`, [leagueId]); return result.rows.map(r => r.data as T); }
-async function saveRows(table: "auction_teams" | "auction_players", leagueId: string, values: Array<{id:string}>, client?: PoolClient): Promise<void> { await ensureLeague(leagueId, client); const q=client || db(); await q.query(`DELETE FROM ${table} WHERE league_id=$1`, [leagueId]); for (const value of values) await q.query(`INSERT INTO ${table}(league_id,id,data) VALUES($1,$2,$3)`, [leagueId,value.id,value]); }
+async function saveRows(table: "auction_teams" | "auction_players", leagueId: string, values: Array<{id:string}>, client?: PoolClient): Promise<void> {
+  if (!client) {
+    await ready();
+    const owned = await db().connect();
+    try {
+      await owned.query("BEGIN");
+      await ensureLeague(leagueId, owned);
+      // Same lock order as auction actions; viewers never see a partial replacement.
+      await owned.query("SELECT league_id FROM auction_states WHERE league_id=$1 FOR UPDATE", [leagueId]);
+      await saveRows(table, leagueId, values, owned);
+      await owned.query("COMMIT");
+    } catch (error) {
+      await owned.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally { owned.release(); }
+    return;
+  }
+  await ensureLeague(leagueId, client);
+  await client.query(`DELETE FROM ${table} WHERE league_id=$1`, [leagueId]);
+  for (const value of values) await client.query(`INSERT INTO ${table}(league_id,id,data) VALUES($1,$2,$3)`, [leagueId,value.id,value]);
+}
 
 export function invalidateLeagueCache(_leagueId: string) {}
 export function getDesignatedActiveTournamentId() { return activeTournamentId; }

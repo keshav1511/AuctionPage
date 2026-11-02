@@ -77,7 +77,7 @@ export function useRealtimeAuction(leagueId: string): RealtimeAuctionState {
         0;
 
       // Reject stale out-of-order updates
-      if (incomingRev > 0 && incomingRev < lastRevisionRef.current) {
+      if (incomingRev < lastRevisionRef.current) {
         return false;
       }
 

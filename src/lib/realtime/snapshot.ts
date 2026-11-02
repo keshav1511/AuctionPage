@@ -121,18 +121,53 @@ export function mapSnapshot(row: SnapshotRow): AuctionSnapshot {
     session, revision: Number(row.revision), pausedRemainingSeconds: row.state.pausedRemainingSeconds };
 }
 
-// Explicit public field lists prevent imported metadata or future private fields leaking.
-function pick<T extends object>(value: T, keys: readonly (keyof T)[]): T {
-  return Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key,value[key]])) as T;
+// Public projections are explicit at every level: JSON imports can carry fields
+// that TypeScript interfaces alone cannot exclude at runtime.
+function pickScalars<T extends object>(value: T, keys: readonly (keyof T)[]): T {
+  return Object.fromEntries(keys.filter(key => {
+    const field = value[key];
+    return field !== undefined && (field === null || ["string", "number", "boolean"].includes(typeof field));
+  }).map(key => [key, value[key]])) as T;
+}
+const CATEGORIES = ["ICON", "PLATINUM", "GOLD", "SILVER", "EMERGING"] as const;
+function categoryNumbers(value: Record<string, unknown>): Record<string, number> {
+  return Object.fromEntries(CATEGORIES.filter(key => typeof value[key] === "number" && Number.isFinite(value[key]))
+    .map(key => [key, value[key] as number]));
 }
 export function publicSnapshot(snapshot: AuctionSnapshot): AuctionSnapshot {
-  const league = pick(snapshot.league, ['id','slug','name','description','logoUrl','orgName','orgLogoUrl','defaultBasePrice','defaultPurse','matchDate','matchVenue','auctionDate','auctionTime','timezone','primaryColor','secondaryColor','brandingPalette','backgroundConfig','edition','status','tournamentId']);
-  const teams = snapshot.teams.map(t => pick(t, ['id','seasonId','name','shortCode','logoUrl','ownerName','ownerPhotoUrl','iconPlayerName','iconPlayerPhotoUrl','primaryColor','secondaryColor','purse','squadCount','categoryLimits','isCompleted','completionStatus']));
-  const players = snapshot.players.map(p => pick(p, ['id','seasonId','registrationNo','fullName','name','category','primaryRole','battingStyle','bowlingStyle','photoUrl','normalizedPhotoUrl','photoAspectRatio','basePrice','basePriceOverride','status','sortOrder','statsSummary','soldToTeamId','soldPrice']));
-  const session = buildAuctionSession({ ...snapshot.session, version: snapshot.session.version || 1, timerExpiresAt: snapshot.session.timerExpiresAt || "", bidExtensionSeconds: snapshot.session.bidExtensionSeconds || snapshot.rules.bidExtensionSeconds || 10,
-    round2QueueJson: JSON.stringify(snapshot.session.round2Queue || []),
-    announcementJson: JSON.stringify(snapshot.session.announcement) }, players, teams,
-    snapshot.session.recentBids.map(b => pick(b, ['id','auctionId','playerId','teamId','teamName','teamShortCode','teamLogoUrl','amount','bidType','placedAt'])), snapshot.rules);
+  const league = pickScalars(snapshot.league, ['id','slug','name','description','logoUrl','orgName','orgLogoUrl','defaultBasePrice','defaultPurse','matchDate','matchVenue','auctionDate','auctionTime','timezone','primaryColor','secondaryColor','edition','status','tournamentId']);
+  if (snapshot.league.brandingPalette) league.brandingPalette = pickScalars(snapshot.league.brandingPalette, ['primary','secondary','accent','background','card','border','text']);
+  if (snapshot.league.backgroundConfig) league.backgroundConfig = pickScalars(snapshot.league.backgroundConfig, ['imageUrl','position','scale','overlayOpacity']);
+  const teams = snapshot.teams.map(t => {
+    const team = pickScalars(t, ['id','seasonId','name','shortCode','logoUrl','ownerName','ownerPhotoUrl','iconPlayerName','iconPlayerPhotoUrl','primaryColor','secondaryColor','squadCount','isCompleted','completionStatus']);
+    team.purse = pickScalars(t.purse, ['id','teamId','totalBudget','spentAmount','remainingAmount','minPlayers','maxPlayers','reservedForSquad','totalPurse','reservedPurse']);
+    if (t.categoryLimits) team.categoryLimits = Object.fromEntries(CATEGORIES.flatMap(category => {
+      return ['min', 'max'].flatMap(bound => {
+        const key = `${bound}_${category.toLowerCase()}`;
+        const value = t.categoryLimits?.[key];
+        return typeof value === 'number' && Number.isFinite(value) ? [[key, value]] : [];
+      });
+    }));
+    return team;
+  });
+  const players = snapshot.players.map(p => {
+    const player = pickScalars(p, ['id','seasonId','registrationNo','fullName','name','category','primaryRole','battingStyle','bowlingStyle','photoUrl','normalizedPhotoUrl','photoAspectRatio','basePrice','basePriceOverride','status','sortOrder','soldToTeamId','soldPrice']);
+    if (p.statsSummary) player.statsSummary = pickScalars(p.statsSummary, ['matches','runs','wickets','highestScore','economy','strikeRate','notableAchievement']);
+    return player;
+  });
+  const rules = pickScalars(snapshot.rules, ['id','seasonId','totalPurse','basePrice','iconBasePrice','platinumBasePrice','goldBasePrice','silverBasePrice','emergingBasePrice','enableIndividualOverrides','initialTimerSeconds','bidExtensionSeconds','bidExtensionThresholdSeconds','timerDurationSeconds','minimumSquadSize','maximumSquadSize','minimumBasePrice','minBidIncrement','purseAmount','purseReservePerPlayer']);
+  if (snapshot.rules.categoryBasePrices) rules.categoryBasePrices = categoryNumbers(snapshot.rules.categoryBasePrices) as NonNullable<AuctionRules['categoryBasePrices']>;
+  if (snapshot.rules.categoryMinimumBasePrices) rules.categoryMinimumBasePrices = categoryNumbers(snapshot.rules.categoryMinimumBasePrices);
+  if (snapshot.rules.categoryQuotas) rules.categoryQuotas = categoryNumbers(snapshot.rules.categoryQuotas);
+  if (snapshot.rules.bidSlabRules) rules.bidSlabRules = snapshot.rules.bidSlabRules.map(slab => pickScalars(slab, ['id','min','max','step']));
+  if (snapshot.rules.bidIncrements) rules.bidIncrements = snapshot.rules.bidIncrements.map(increment => pickScalars(increment, ['upTo','increment']));
+  const publicSession = pickScalars(snapshot.session, ['id','seasonId','currentPlayerId','currentHighestBid','currentLeadingTeamId','status','timerSeconds','timerExpiresAt','bidExtensionSeconds','round','roundStage','round2InitializedAt','round1Completed','bidCount','version','updatedAt']);
+  const announcement = snapshot.session.announcement ? pickScalars(snapshot.session.announcement, ['type','playerId','winningTeamId','soldPrice','startedAt','endsAt']) : null;
+  const session = buildAuctionSession({ ...publicSession, version: publicSession.version || 1, timerExpiresAt: publicSession.timerExpiresAt || "", bidExtensionSeconds: publicSession.bidExtensionSeconds || rules.bidExtensionSeconds || 10,
+    round2QueueJson: JSON.stringify((snapshot.session.round2Queue || []).map(item => pickScalars(item, ['id','status']))),
+    announcementJson: JSON.stringify(announcement) }, players, teams,
+    snapshot.session.recentBids.map(b => pickScalars(b, ['id','auctionId','playerId','teamId','teamName','teamShortCode','teamLogoUrl','amount','bidType','placedAt'])), rules);
   session.revision = snapshot.revision;
-  return { ...snapshot, league, teams, players, session };
+  return { league, teams, players, session, rules, revision: snapshot.revision,
+    pausedRemainingSeconds: snapshot.pausedRemainingSeconds };
 }

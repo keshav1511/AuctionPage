@@ -26,7 +26,12 @@ class FakeClient {
     if(FakeClient.failConnect) throw new Error("Simulated database connect failure");
   }
   async query(sql){
-    if (sql.startsWith('LISTEN')) { this.listening=true; return {rows:[]}; }
+    if (sql.startsWith('LISTEN')) {
+      this.listening=true;
+      const hook=FakeClient.listenHook; FakeClient.listenHook=undefined;
+      if(hook) hook(this);
+      return {rows:[]};
+    }
     assert.ok(this.listening,'subscription must precede snapshot');
     if(this.failRead) throw new Error("Simulated snapshot read failure");
     const snapshot=structuredClone(row);
@@ -96,6 +101,14 @@ try {
   globalThis.setInterval=(callback,delay,...args)=>{const handle={delay};intervals.set(handle,()=>callback(...args));return handle;};
   globalThis.clearInterval=handle=>{if(!intervals.delete(handle))originals.clearInterval(handle);};
   try {
+    const abortedDuringListen=new AbortController();
+    FakeClient.listenHook=()=>abortedDuringListen.abort();
+    const abortedResponse=await GET(new Request('https://example.test/api/realtime/stream?leagueId=test',{signal:abortedDuringListen.signal}));
+    assert.equal(abortedResponse.status,499,'abort during LISTEN must not start a stream');
+    assert.equal(clients.size,0,'abort during LISTEN must release database client');
+    assert.equal(timeouts.size,0,'abort during LISTEN must not install lifetime timers');
+    assert.equal(intervals.size,0,'abort during LISTEN must not install heartbeat timers');
+
     const rotationResponse=await GET(new Request('https://example.test/api/realtime/stream?leagueId=test'));
     const rotationReader=rotationResponse.body.getReader(); await frame(rotationReader);
     assert.equal(timeouts.size,1,'one bounded stream lifetime must be scheduled');
@@ -127,9 +140,12 @@ try {
   assert.equal((await GET(new Request('https://example.test/api/realtime/stream?leagueId=test'))).status,503);
   assert.equal(clients.size,0,'connect failures must release database clients');
   FakeClient.failConnect=false;
+  process.env.DATABASE_DIRECT_URL='not a valid database URL';
+  assert.equal((await GET(new Request('https://example.test/api/realtime/stream'))).status,503,'malformed configuration must return controlled 503');
+  assert.equal(clients.size,0,'invalid configuration must not allocate database clients');
   process.env.DATABASE_DIRECT_URL='postgresql://test:test@ep-test-pooler.neon.tech/test';
   assert.equal((await GET(new Request('https://example.test/api/realtime/stream'))).status,503);
-  console.log('PASS: snapshot mapping, private metadata exclusion, subscribe-before-read, 25-stream fan-out, snapshot race recovery, heartbeat, rotation, database error cleanup, cancellation, abort, pooler rejection');
+  console.log('PASS: snapshot mapping, private metadata exclusion, subscribe-before-read, 25-stream fan-out, snapshot race recovery, heartbeat, rotation, database error cleanup, cancellation, abort during LISTEN, malformed configuration, pooler rejection');
 } finally {
   if(previous===undefined)delete process.env.DATABASE_DIRECT_URL;else process.env.DATABASE_DIRECT_URL=previous;
   delete globalThis.__auctionTestClient;
