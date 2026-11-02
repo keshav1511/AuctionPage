@@ -53,11 +53,11 @@ export function parseBasePrice(val: string, category: PlayerCategory): number {
       case "GOLD": return 50000;
       case "SILVER": return 25000;
       case "EMERGING": return 15000;
-      default: return 25000;
+      default: return 1000;
     }
   }
   const clean = val.replace(/[^0-9]/g, "");
-  return parseInt(clean, 10) || 25000;
+  return parseInt(clean, 10) || 1000;
 }
 
 /**

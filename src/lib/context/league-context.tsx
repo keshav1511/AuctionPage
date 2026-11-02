@@ -280,6 +280,7 @@ export function LeagueProvider({ children }: { children: ReactNode }) {
       minimumSquadSize: newTourney.minSquadSize || 8,
       maximumSquadSize: newTourney.maxSquadSize || 8,
       basePrice: newTourney.defaultBasePrice || 2000,
+      minimumBasePrice: newTourney.defaultBasePrice || 2000,
     });
 
     try {

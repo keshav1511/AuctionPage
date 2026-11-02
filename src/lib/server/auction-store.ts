@@ -28,7 +28,11 @@ import {
   executeSerializedAuctionAction,
 } from "@/lib/sheets/google-sheets-repository";
 import { AuctionStateRow, PurchaseRecord, AuditLogEntry } from "@/lib/sheets/tab-definitions";
-import { validateBidEligibility } from "@/lib/auction/purse-validator";
+import {
+  validateBidEligibility,
+  resolveEffectiveSquadLimits,
+  resolveEffectiveMinimumBasePrice,
+} from "@/lib/auction/purse-validator";
 import { getTeamParticipantCounts, formatTeamParticipantBreakdown } from "@/lib/auction/team-size-calculator";
 import {
   detectRound1Completion,
@@ -536,8 +540,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
         const effectiveBasePrice =
           currentPlayer?.basePriceOverride ||
           currentPlayer?.basePrice ||
-          rules.basePrice ||
-          0;
+          resolveEffectiveMinimumBasePrice(rules, 0);
 
         if (effectiveBasePrice <= 0) {
           return {
@@ -569,20 +572,19 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
         // Enforce team squad completion and limit restriction using total participants:
         // Total Team Size = Registered Players + Team Owner (1 if assigned) + Team Icon (1 if assigned)
         const counts = getTeamParticipantCounts(team, teamPurchasedPlayers.length);
-        const minSquadSize = team.purse?.minPlayers || rules.minimumSquadSize || 15;
-        const maxSquadSize = team.purse?.maxPlayers || 18;
+        const { minimumSquadSize, maximumSquadSize } = resolveEffectiveSquadLimits(rules, team, 8, 8);
 
-        if (counts.totalParticipants >= minSquadSize) {
+        if (counts.totalParticipants >= maximumSquadSize) {
           return {
             success: false,
-            error: `Team ${team.name} has already completed its required squad (${counts.totalParticipants}/${minSquadSize} participants). Current count: ${formatTeamParticipantBreakdown(counts)}.`,
+            error: `Squad limit reached (${counts.totalParticipants}/${maximumSquadSize} participants). Current count: ${formatTeamParticipantBreakdown(counts)}.`,
           };
         }
 
-        if (counts.totalParticipants >= maxSquadSize) {
+        if (counts.totalParticipants >= minimumSquadSize && minimumSquadSize === maximumSquadSize) {
           return {
             success: false,
-            error: `Squad limit reached (${counts.totalParticipants}/${maxSquadSize} participants). Current count: ${formatTeamParticipantBreakdown(counts)}.`,
+            error: `Team ${team.name} has already completed its required squad (${counts.totalParticipants}/${minimumSquadSize} participants). Current count: ${formatTeamParticipantBreakdown(counts)}.`,
           };
         }
 
@@ -813,7 +815,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
 
         const initialDuration = rules.initialTimerSeconds || 45;
         const expiryIso = new Date(Date.now() + initialDuration * 1000).toISOString();
-        const basePrice = targetPlayer.basePriceOverride || targetPlayer.basePrice || 25000;
+        const basePrice = targetPlayer.basePriceOverride || targetPlayer.basePrice || resolveEffectiveMinimumBasePrice(rules, 1000);
 
         const updatedPlayers = players.map((p) =>
           p.id === targetPlayer.id ? { ...p, status: "ON_AUCTION" as const } : p
@@ -876,17 +878,16 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
           if (t.id === buyerTeam.id) {
             const currentSpent = t.purse?.spentAmount || 0;
             const newSpent = currentSpent + finalPrice;
-            const newRemaining = (t.purse?.totalBudget || 5000000) - newSpent;
+            const totalBudget = t.purse?.totalBudget || rules.totalPurse || 50000;
+            const newRemaining = totalBudget - newSpent;
             const currentPurchased = players.filter(
               (p) => p.status === "SOLD" && p.soldToTeamId === t.id
             ).length;
             const newCounts = getTeamParticipantCounts(t, currentPurchased + 1);
             const newSquadCount = newCounts.totalParticipants;
-            const minPlayers = t.purse?.minPlayers || rules.minimumSquadSize || 15;
-            const minBasePrice =
-              rules.minimumBasePrice ||
-              (rules.categoryBasePrices?.SILVER ?? rules.silverBasePrice ?? 25000);
-            const remainingNeeded = Math.max(0, minPlayers - newSquadCount);
+            const { minimumSquadSize } = resolveEffectiveSquadLimits(rules, t, 8, 8);
+            const minBasePrice = resolveEffectiveMinimumBasePrice(rules, 1000);
+            const remainingNeeded = Math.max(0, minimumSquadSize - newSquadCount);
             const reserved = remainingNeeded * minBasePrice;
 
             return {
@@ -894,6 +895,7 @@ export async function processAuctionAction(payload: AuctionActionPayload): Promi
               squadCount: newSquadCount,
               purse: {
                 ...t.purse,
+                totalBudget,
                 spentAmount: newSpent,
                 remainingAmount: newRemaining,
                 reservedForSquad: reserved,

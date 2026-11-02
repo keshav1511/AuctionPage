@@ -107,7 +107,10 @@ export default function AdminSettingsPage() {
       initialTimerSeconds: initialCountdown,
       bidExtensionSeconds: bidExtension,
       minimumSquadSize: minSquadSize,
+      maximumSquadSize: maxSquadSize,
       minimumBasePrice: minimumBasePrice,
+      basePrice: minimumBasePrice,
+      totalPurse: defaultPurse,
       bidSlabRules: slabs,
     });
 
@@ -325,17 +328,50 @@ export default function AdminSettingsPage() {
                   </div>
                 </div>
 
-                <div className="p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-xl text-xs text-emerald-900 space-y-1">
-                  <span className="font-bold block">Squad Calculation & Dynamic Reserve Formula:</span>
-                  <p className="text-[11px] font-mono text-emerald-800">
-                    Total Participants = Registered Players + Team Owner (1) + Team Icon (1)
-                  </p>
-                  <p className="text-[11px] font-mono text-emerald-800">
-                    Remaining Reserve = max(0, MinSquad - TotalParticipants - 1) × MinimumBasePrice
-                  </p>
-                  <p className="text-[11px] font-mono text-emerald-800">
-                    Maximum Allowed Bid = max(0, RemainingPurse - RemainingReserve)
-                  </p>
+                <div className="p-4 bg-emerald-50/70 border border-emerald-200/80 rounded-xl text-xs text-emerald-900 space-y-2">
+                  <span className="font-bold block text-emerald-950">Authoritative Dynamic Reserve & Maximum Bid Rules:</span>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                    <div className="space-y-1 font-mono text-[11px] text-emerald-800 bg-white/70 p-2.5 rounded-lg border border-emerald-100">
+                      <p>• Total Participants = Reg Players + Owner (1) + Icon (1)</p>
+                      <p>• Remaining Slots = max(0, MinSquad - TotalParticipants)</p>
+                      <p>• Standing Reserve = Remaining Slots × MinBasePrice</p>
+                      <p>• Slots After Bid = max(0, MinSquad - TotalParticipants - 1)</p>
+                      <p>• Bidding Reserve = Slots After Bid × MinBasePrice</p>
+                      <p>• Maximum Bid = max(0, Remaining Purse - Bidding Reserve)</p>
+                    </div>
+
+                    {/* Live Preview Calculator with current configured values */}
+                    <div className="p-2.5 bg-white/90 rounded-lg border border-emerald-200 space-y-1 text-slate-800 font-sans">
+                      <span className="font-bold text-[11px] text-slate-900 block">
+                        Live Preview (Sample Franchise with 2 Participants & {formatCurrency(defaultPurse)} Purse):
+                      </span>
+                      {(() => {
+                        const sampleParticipants = 2;
+                        const sampleSlots = Math.max(0, minSquadSize - sampleParticipants);
+                        const sampleStandingReserve = sampleSlots * minimumBasePrice;
+                        const sampleSlotsAfter = Math.max(0, minSquadSize - sampleParticipants - 1);
+                        const sampleBiddingReserve = sampleSlotsAfter * minimumBasePrice;
+                        const sampleMaxBid = Math.max(0, defaultPurse - sampleBiddingReserve);
+
+                        return (
+                          <div className="space-y-1 text-[11px] font-mono">
+                            <div className="flex justify-between">
+                              <span className="text-slate-500 font-sans">Standing Reserve ({sampleSlots} slots × {formatCurrency(minimumBasePrice)}):</span>
+                              <span className="font-bold text-amber-700">{formatCurrency(sampleStandingReserve)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500 font-sans">Bidding Reserve ({sampleSlotsAfter} slots × {formatCurrency(minimumBasePrice)}):</span>
+                              <span className="font-bold text-slate-700">{formatCurrency(sampleBiddingReserve)}</span>
+                            </div>
+                            <div className="flex justify-between border-t border-slate-200 pt-1 font-bold">
+                              <span className="text-slate-700 font-sans">Max Bid Permitted:</span>
+                              <span className="text-emerald-700">{formatCurrency(sampleMaxBid)}</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>

@@ -4,6 +4,11 @@ import React, { useMemo } from "react";
 import { Team, Player, AuctionSession, AuctionRules } from "@/types";
 import { formatCurrency, formatRole, getRoleBadgeColor } from "@/lib/utils";
 import { getTeamParticipantCounts } from "@/lib/auction/team-size-calculator";
+import {
+  calculatePurseReserve,
+  resolveEffectiveSquadLimits,
+  resolveEffectiveMinimumBasePrice,
+} from "@/lib/auction/purse-validator";
 import { Progress } from "@/components/ui/progress";
 import { Users, TrendingUp, Sparkles, CheckCircle2 } from "lucide-react";
 
@@ -55,23 +60,33 @@ export function LiveTeamDashboard({
           const counts = getTeamParticipantCounts(team, teamSoldPlayers.length);
 
           // 3. Financial calculations
-          const totalPurse = team.purse?.totalBudget || 100000;
+          const totalPurse = team.purse?.totalBudget || rules.totalPurse || 50000;
           const spentAmount = teamSoldPlayers.reduce(
             (sum, p) => sum + (p.soldPrice || p.basePrice || 0),
             0
           );
-          const remainingPurse = Math.max(0, totalPurse - spentAmount);
+          const remainingPurse = Math.max(0, (team.purse?.remainingAmount ?? totalPurse) - (team.purse?.spentAmount !== undefined ? 0 : spentAmount));
 
-          // 4. Bidding state
+          // 4. Authoritative squad limits and base price
+          const { minimumSquadSize: minSquad, maximumSquadSize: maxSquad } = resolveEffectiveSquadLimits(rules, team, 8, 8);
+          const minBasePrice = resolveEffectiveMinimumBasePrice(rules, 1000);
+
+          const reserveResult = calculatePurseReserve({
+            remainingPurse,
+            minimumSquadSize: minSquad,
+            maximumSquadSize: maxSquad,
+            playersPurchased: counts.totalParticipants,
+            minimumBasePrice: minBasePrice,
+          });
+
+          // 5. Bidding state
           const isLeading =
             session.currentLeadingTeamId === team.id &&
             (session.currentHighestBid || 0) > 0;
           const currentBidAmount = session.currentHighestBid || 0;
 
-          // 5. Squad composition & capacity
-          const minSquad = team.purse?.minPlayers || rules.minimumSquadSize || 8;
-          const maxSquad = team.purse?.maxPlayers || rules.maximumSquadSize || 8;
-          const additionalRequired = Math.max(0, minSquad - counts.totalParticipants);
+          // 6. Squad composition & capacity
+          const additionalRequired = reserveResult.remainingSlots;
           const remainingCapacity = Math.max(0, maxSquad - counts.totalParticipants);
           const isMinSquadMet = counts.totalParticipants >= minSquad;
           const isMaxSquadReached = counts.totalParticipants >= maxSquad;
@@ -218,6 +233,20 @@ export function LiveTeamDashboard({
                     <span>Spent / Total:</span>
                     <span className="font-mono text-slate-300">
                       {formatCurrency(spentAmount, true)} / {formatCurrency(totalPurse, true)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[10px] text-slate-400">
+                    <span>Reserve Req:</span>
+                    <span className="font-mono font-semibold text-amber-400">
+                      {formatCurrency(reserveResult.standingReserve, true)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[10px] text-slate-400">
+                    <span>Max Bid:</span>
+                    <span className="font-mono font-bold text-emerald-400">
+                      {formatCurrency(reserveResult.maximumBidAllowed, true)}
                     </span>
                   </div>
 

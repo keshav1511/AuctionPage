@@ -164,12 +164,12 @@ export function serializeTeam(team: Team): string[] {
   const purse = team.purse || {
     id: `purse-${team.id}`,
     teamId: team.id,
-    totalBudget: 5000000,
+    totalBudget: 50000,
     spentAmount: 0,
-    remainingAmount: 5000000,
-    minPlayers: 15,
-    maxPlayers: 18,
-    reservedForSquad: 350000,
+    remainingAmount: 50000,
+    minPlayers: 8,
+    maxPlayers: 8,
+    reservedForSquad: 0,
   };
 
   return [
@@ -184,12 +184,12 @@ export function serializeTeam(team: Team): string[] {
     team.iconPlayerPhotoUrl || "",
     team.primaryColor || "#059669",
     team.secondaryColor || "#F59E0B",
-    String(purse.totalBudget || 5000000),
+    String(purse.totalBudget || 50000),
     String(purse.spentAmount || 0),
-    String(purse.remainingAmount || 5000000),
-    String(purse.minPlayers || 15),
-    String(purse.maxPlayers || 18),
-    String(purse.reservedForSquad || 350000),
+    String(purse.remainingAmount != null ? purse.remainingAmount : (purse.totalBudget || 50000) - (purse.spentAmount || 0)),
+    String(purse.minPlayers || 8),
+    String(purse.maxPlayers || 8),
+    String(purse.reservedForSquad || 0),
     String(team.squadCount || 0),
     JSON.stringify(team.categoryLimits || {}),
     new Date().toISOString(),
@@ -204,12 +204,12 @@ export function deserializeTeam(row: (string | undefined)[]): Team | null {
     if (row[18]) categoryLimits = JSON.parse(row[18]);
   } catch {}
 
-  const totalBudget = Number(row[11]) || 5000000;
+  const totalBudget = Number(row[11]) || 50000;
   const spentAmount = Number(row[12]) || 0;
   const remainingAmount = Number(row[13]) || (totalBudget - spentAmount);
-  const minPlayers = Number(row[14]) || 15;
-  const maxPlayers = Number(row[15]) || 18;
-  const reservedForSquad = Number(row[16]) || 350000;
+  const minPlayers = Number(row[14]) || 8;
+  const maxPlayers = Number(row[15]) || 8;
+  const reservedForSquad = Number(row[16]) || 0;
   const squadCount = Number(row[17]) || 0;
 
   return {

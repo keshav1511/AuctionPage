@@ -46,6 +46,7 @@ export const DEFAULT_AUCTION_RULES: AuctionRules = {
   seasonId: "league-main",
   totalPurse: 100000,
   basePrice: 2000,
+  minimumBasePrice: 2000,
   minBidIncrement: 500,
   initialTimerSeconds: 45,
   bidExtensionSeconds: 10,

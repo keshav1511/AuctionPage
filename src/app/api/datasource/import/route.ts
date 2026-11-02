@@ -172,6 +172,12 @@ export async function POST(req: NextRequest) {
     const teamsByName = new Map<string, Team>();
     existingTeams.forEach((t) => teamsByName.set(t.name.toLowerCase().trim(), t));
 
+    const leagueConfig = await getLeagueConfigFromSheets(leagueId);
+    const defaultPurseAmount = leagueConfig.rules?.totalPurse || 50000;
+    const defaultMinSquad = leagueConfig.rules?.minimumSquadSize || 8;
+    const defaultMaxSquad = leagueConfig.rules?.maximumSquadSize || 8;
+    const defaultBasePrice = leagueConfig.rules?.basePrice || leagueConfig.rules?.minimumBasePrice || 1000;
+
     // Provision teams from discovered affiliations
     const allDiscoveredTeamNames = parsed.teamsDiscovered;
     allDiscoveredTeamNames.forEach((teamName, idx) => {
@@ -194,11 +200,11 @@ export async function POST(req: NextRequest) {
           purse: {
             id: `purse-${shortCode.toLowerCase()}`,
             teamId: `team-${leagueId}-${shortCode.toLowerCase()}`,
-            totalBudget: 10000000,
+            totalBudget: defaultPurseAmount,
             spentAmount: 0,
-            remainingAmount: 10000000,
-            minPlayers: 15,
-            maxPlayers: 18,
+            remainingAmount: defaultPurseAmount,
+            minPlayers: defaultMinSquad,
+            maxPlayers: defaultMaxSquad,
             reservedForSquad: 0,
           },
         };
@@ -241,7 +247,7 @@ export async function POST(req: NextRequest) {
       battingStyle: "Right-Hand Bat",
       bowlingStyle: "Right-Arm Medium",
       photoUrl: rec.resolvedPhotoUrl || "/mock/default-player.png",
-      basePrice: rec.basePrice || 25000,
+      basePrice: rec.basePrice || defaultBasePrice,
       status: "AVAILABLE",
       sortOrder: i + 1,
     }));

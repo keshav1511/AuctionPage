@@ -11,7 +11,11 @@ import { formatCurrency, formatRole } from "@/lib/utils";
 import { useLeague } from "@/lib/context/league-context";
 import { useRealtimeAuction } from "@/lib/hooks/use-realtime-auction";
 import { calculateNextBid } from "@/lib/auction/slab-calculator";
-import { analyzeTeamBiddingEligibility, TeamPurseReserveAnalysis } from "@/lib/auction/purse-validator";
+import {
+  analyzeTeamBiddingEligibility,
+  TeamPurseReserveAnalysis,
+  resolveEffectiveMinimumBasePrice,
+} from "@/lib/auction/purse-validator";
 import {
   calculateRoundStatistics,
   detectRound1Completion,
@@ -76,9 +80,10 @@ export default function AuctionControlDesk() {
     return null;
   }, [session.currentPlayer, session.currentPlayerId, livePlayers]);
 
+  const tournamentFloorBasePrice = resolveEffectiveMinimumBasePrice(liveRules, 1000);
   const basePriceForPlayer = currentPlayer
-    ? (currentPlayer.basePriceOverride || currentPlayer.basePrice || liveRules.basePrice || 2000)
-    : (liveRules.basePrice || 2000);
+    ? (currentPlayer.basePriceOverride || currentPlayer.basePrice || tournamentFloorBasePrice)
+    : tournamentFloorBasePrice;
 
   const { nextBid, step: currentStep } = calculateNextBid(
     session.currentHighestBid,
@@ -663,10 +668,10 @@ export default function AuctionControlDesk() {
                   const analysis = teamAnalyses[t.id];
                   const isLeader = analysis?.isCurrentLeader ?? (session.currentLeadingTeamId === t.id);
                   const isEligible = analysis?.isEligibleToBid ?? true;
-                  const remainingPurse = analysis?.remainingPurse ?? (t.purse?.remainingAmount || 5000000);
+                  const remainingPurse = analysis?.remainingPurse ?? (t.purse?.remainingAmount || liveRules.totalPurse || 50000);
                   const playersPurchased = analysis?.playersPurchased ?? (t.squadCount || 0);
-                  const minimumSquadSize = analysis?.minimumSquadSize ?? (t.purse?.minPlayers || 15);
-                  const requiredReserve = analysis?.requiredReserve ?? 0;
+                  const minimumSquadSize = analysis?.minimumSquadSize ?? (liveRules.minimumSquadSize || t.purse?.minPlayers || 8);
+                  const requiredReserve = analysis?.standingReserve ?? analysis?.requiredReserve ?? 0;
                   const maximumBidAllowed = analysis?.maximumBidAllowed ?? remainingPurse;
 
                   const isCompleted = analysis?.isCompleted ?? (playersPurchased >= minimumSquadSize);

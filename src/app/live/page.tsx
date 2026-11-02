@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, Suspense } from "react";
+import { useState, useEffect, useMemo, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import confetti from "canvas-confetti";
@@ -68,14 +68,28 @@ function LiveAuctionContent() {
     connectionStatus,
     currentRevision,
     remainingSeconds,
-    isHammered,
   } = useRealtimeAuction(effectiveLeagueId);
 
-  // Authoritative 5-second announcement timer calculation
+  // Authoritative 5-second announcement timer & deduplication management
   const [announcementRemaining, setAnnouncementRemaining] = useState<number>(0);
+  const completedAnnouncementsRef = useRef<Set<string>>(new Set());
+  const confettiFiredRef = useRef<Set<string>>(new Set());
+
+  // Derive unique identifier for current announcement to prevent duplicate presentations
+  const activeAnnouncementKey = useMemo(() => {
+    const ann = session.announcement;
+    if (!ann || !ann.playerId || ann.type === "NONE" || !ann.endsAt) return null;
+    return `${ann.playerId}_${ann.type}_${ann.startedAt || ann.endsAt}`;
+  }, [session.announcement]);
 
   useEffect(() => {
-    if (!session.announcement || !session.announcement.endsAt) {
+    if (!session.announcement || !session.announcement.endsAt || !activeAnnouncementKey) {
+      setAnnouncementRemaining(0);
+      return;
+    }
+
+    // Protection against repeated presentation from polling, SSE reconnects, or re-renders
+    if (completedAnnouncementsRef.current.has(activeAnnouncementKey)) {
       setAnnouncementRemaining(0);
       return;
     }
@@ -84,31 +98,42 @@ function LiveAuctionContent() {
       const endsAtMs = new Date(session.announcement!.endsAt).getTime();
       const nowMs = Date.now();
       const diff = Math.max(0, Math.ceil((endsAtMs - nowMs) / 1000));
-      setAnnouncementRemaining(diff);
+
+      if (diff <= 0) {
+        completedAnnouncementsRef.current.add(activeAnnouncementKey);
+        setAnnouncementRemaining(0);
+      } else {
+        setAnnouncementRemaining(diff);
+      }
     };
 
     checkDuration();
-    const interval = setInterval(checkDuration, 200);
+    const interval = setInterval(checkDuration, 100);
     return () => clearInterval(interval);
-  }, [session.announcement]);
+  }, [session.announcement, activeAnnouncementKey]);
 
   const isAnnouncementActive = Boolean(
     session.announcement &&
     session.announcement.type !== "NONE" &&
-    announcementRemaining > 0
+    announcementRemaining > 0 &&
+    activeAnnouncementKey &&
+    !completedAnnouncementsRef.current.has(activeAnnouncementKey)
   );
 
-  // Trigger celebratory confetti when sold
+  // Trigger celebratory broadcast confetti when lot is confirmed SOLD (exactly once per announcement)
   useEffect(() => {
-    if (isHammered || (isAnnouncementActive && session.announcement?.type === "SOLD")) {
-      confetti({
-        particleCount: 160,
-        spread: 90,
-        origin: { y: 0.6 },
-        colors: ["#F59E0B", "#10B981", "#FFFFFF", "#FBBF24"],
-      });
+    if (isAnnouncementActive && session.announcement?.type === "SOLD" && activeAnnouncementKey) {
+      if (!confettiFiredRef.current.has(activeAnnouncementKey)) {
+        confettiFiredRef.current.add(activeAnnouncementKey);
+        confetti({
+          particleCount: 160,
+          spread: 90,
+          origin: { y: 0.6 },
+          colors: ["#F59E0B", "#10B981", "#FFFFFF", "#FBBF24"],
+        });
+      }
     }
-  }, [isHammered, isAnnouncementActive, session.announcement?.type, session.announcement?.playerId]);
+  }, [isAnnouncementActive, session.announcement?.type, activeAnnouncementKey]);
 
   // Authoritative player lot and leading franchise derivations (unconditional hooks)
   const player: Player | null = useMemo(() => {
@@ -267,12 +292,16 @@ function LiveAuctionContent() {
 
           {/* Center: Large Player Photograph with Falling Stamp Animation */}
           <main className="my-auto py-6 flex flex-col items-center justify-center relative">
-            <div className="relative w-64 sm:w-80 lg:w-96 aspect-[3/4] rounded-3xl overflow-hidden border-4 border-slate-700/80 shadow-[0_20px_60px_rgba(0,0,0,0.9)] bg-slate-950">
+            <div className={`relative w-64 sm:w-80 lg:w-96 aspect-[3/4] rounded-3xl overflow-hidden border-4 shadow-[0_20px_60px_rgba(0,0,0,0.9)] bg-slate-950 transition-all duration-700 ${
+              isSold ? "border-amber-500/80 shadow-[0_0_60px_rgba(245,158,11,0.35)]" : "border-slate-700/80 shadow-[0_0_50px_rgba(0,0,0,0.8)]"
+            }`}>
               {annPlayer?.photoUrl ? (
                 <img
                   src={annPlayer.photoUrl}
                   alt={annPlayer?.fullName || "Player"}
-                  className="w-full h-full object-cover"
+                  className={`w-full h-full object-cover transition-all duration-700 ${
+                    !isSold ? "grayscale contrast-125 brightness-90" : "contrast-105"
+                  }`}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center bg-slate-900 text-slate-600 font-bold text-4xl">
@@ -282,22 +311,22 @@ function LiveAuctionContent() {
 
               {/* Role Badge at top left of photo */}
               <div className="absolute top-3 left-3 z-10 flex flex-col gap-1">
-                <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-black/70 text-slate-200 backdrop-blur-xs border border-white/10 shadow-md">
-                  {formatRole(annPlayer?.primaryRole || "BATSMAN")}
+                <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-black/75 text-slate-200 backdrop-blur-xs border border-white/10 shadow-md">
+                  {formatRole(annPlayer?.primaryRole || "")}
                 </span>
               </div>
 
               {/* Falling Animated Stamp Overlay */}
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
                 {isSold ? (
-                  <div className="border-[6px] border-amber-400 bg-amber-500/20 backdrop-blur-xs px-8 py-3 rounded-2xl shadow-[0_0_50px_rgba(245,158,11,0.6)] animate-stamp-impact text-center">
+                  <div className="border-[6px] border-amber-400 bg-amber-500/25 backdrop-blur-xs px-8 py-3 rounded-2xl shadow-[0_0_50px_rgba(245,158,11,0.7)] animate-stamp-impact text-center">
                     <span className="block font-black text-4xl sm:text-6xl lg:text-7xl tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-yellow-100 via-amber-300 to-yellow-500 uppercase drop-shadow-[0_4px_10px_rgba(0,0,0,0.8)]">
                       SOLD
                     </span>
                   </div>
                 ) : (
-                  <div className="border-[6px] border-red-500 bg-red-600/20 backdrop-blur-xs px-8 py-3 rounded-2xl shadow-[0_0_50px_rgba(239,68,68,0.6)] animate-stamp-impact text-center">
-                    <span className="block font-black text-4xl sm:text-6xl lg:text-7xl tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-red-200 via-rose-400 to-red-600 uppercase drop-shadow-[0_4px_10px_rgba(0,0,0,0.8)]">
+                  <div className="border-[6px] border-slate-500 bg-black/60 backdrop-blur-xs px-8 py-3 rounded-2xl shadow-[0_0_40px_rgba(0,0,0,0.8)] animate-stamp-impact text-center">
+                    <span className="block font-black text-4xl sm:text-6xl lg:text-7xl tracking-widest text-slate-300 uppercase drop-shadow-[0_4px_10px_rgba(0,0,0,0.9)]">
                       UNSOLD
                     </span>
                   </div>
@@ -324,18 +353,15 @@ function LiveAuctionContent() {
                 </div>
               </div>
             ) : (
-              <div className="bg-gradient-to-r from-rose-950/95 via-red-950/90 to-slate-950/95 border-2 border-red-500/60 shadow-[0_0_50px_rgba(239,68,68,0.25)] rounded-3xl p-5 sm:p-7 text-center backdrop-blur-md space-y-2">
-                <span className="text-xs uppercase font-extrabold tracking-widest text-rose-400 block">
+              <div className="bg-gradient-to-r from-slate-900/95 via-charcoal-900/95 to-slate-950/95 border-2 border-slate-700/80 shadow-[0_0_50px_rgba(0,0,0,0.5)] rounded-3xl p-5 sm:p-7 text-center backdrop-blur-md space-y-2">
+                <span className="text-xs uppercase font-extrabold tracking-widest text-slate-400 block">
                   Official Lot Hammer Result
                 </span>
                 <h2 className="text-3xl sm:text-5xl lg:text-6xl font-black text-white tracking-tight uppercase">
                   {annPlayer?.fullName || "Player"}
                 </h2>
-                <div className="text-base sm:text-xl font-bold text-rose-300 uppercase tracking-wide">
-                  REMAINS UNSOLD IN THIS STAGE
-                </div>
-                <div className="font-mono text-xl sm:text-2xl font-semibold text-slate-400 pt-1">
-                  Base Price: {formatCurrency(annPlayer?.basePrice || 25000)}
+                <div className="inline-block px-4 py-1.5 rounded-full bg-slate-800/90 border border-slate-700 text-sm sm:text-base font-bold text-slate-300 uppercase tracking-wider mt-1">
+                  UNSOLD • LOT CONCLUDED
                 </div>
               </div>
             )}
