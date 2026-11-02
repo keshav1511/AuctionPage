@@ -6,12 +6,9 @@
 
 export const ADMIN_COOKIE_NAME = "ntl_admin_session";
 
-function getSessionSecret(): string {
-  return (
-    process.env.ADMIN_SESSION_SECRET ||
-    process.env.AUTH_SECRET ||
-    "ntl-auction-platform-secure-fallback-secret-2026-key"
-  );
+function getSessionSecret(): string | null {
+  const secret = process.env.ADMIN_SESSION_SECRET || process.env.AUTH_SECRET;
+  return secret && secret.length >= 32 ? secret : null;
 }
 
 export interface AdminSessionPayload {
@@ -64,12 +61,14 @@ export async function verifySessionTokenEdge(
   if (parts.length !== 3) return null;
 
   const [header, data, signature] = parts;
+  const secret = getSessionSecret();
+  if (!secret) return null;
 
   try {
     const enc = new TextEncoder();
     const key = await globalThis.crypto.subtle.importKey(
       "raw",
-      enc.encode(getSessionSecret()),
+      enc.encode(secret),
       { name: "HMAC", hash: "SHA-256" },
       false,
       ["sign"]
@@ -86,11 +85,13 @@ export async function verifySessionTokenEdge(
       return null;
     }
 
+    const headerJson = JSON.parse(base64UrlToUtf8(header)) as { alg?: string; typ?: string };
+    if (headerJson.alg !== "HS256" || headerJson.typ !== "JWT") return null;
     const payloadJson = base64UrlToUtf8(data);
     const payload = JSON.parse(payloadJson) as AdminSessionPayload;
     const now = Math.floor(Date.now() / 1000);
 
-    if (payload.exp && payload.exp < now) {
+    if (!payload.email || !["SUPER_ADMIN", "AUCTIONEER"].includes(payload.role) || !payload.leagueId || !Number.isFinite(payload.exp) || payload.exp <= now) {
       return null;
     }
 

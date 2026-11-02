@@ -10,12 +10,11 @@ import { NextRequest, NextResponse } from "next/server";
 export const ADMIN_COOKIE_NAME = "ntl_admin_session";
 const SESSION_EXPIRY_SECONDS = 60 * 60 * 12; // 12 hours
 
-function getSessionSecret(): string {
-  return (
-    process.env.ADMIN_SESSION_SECRET ||
-    process.env.AUTH_SECRET ||
-    "ntl-auction-platform-secure-fallback-secret-2026-key"
-  );
+function getSessionSecret(): string | null {
+  const secret = process.env.ADMIN_SESSION_SECRET || process.env.AUTH_SECRET;
+  // A deployment must deliberately configure its signing key. A source-controlled
+  // fallback turns every installation into the same administrator session issuer.
+  return secret && secret.length >= 32 ? secret : null;
 }
 
 export interface AdminSessionPayload {
@@ -30,6 +29,8 @@ export interface AdminSessionPayload {
  * Creates a cryptographically signed session token string
  */
 export function createSessionToken(payload: Omit<AdminSessionPayload, "iat" | "exp">): string {
+  const secret = getSessionSecret();
+  if (!secret) throw new Error("ADMIN_SESSION_SECRET must be set to a value of at least 32 characters");
   const now = Math.floor(Date.now() / 1000);
   const fullPayload: AdminSessionPayload = {
     ...payload,
@@ -40,7 +41,7 @@ export function createSessionToken(payload: Omit<AdminSessionPayload, "iat" | "e
   const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
   const data = Buffer.from(JSON.stringify(fullPayload)).toString("base64url");
   const signature = crypto
-    .createHmac("sha256", getSessionSecret())
+    .createHmac("sha256", secret)
     .update(`${header}.${data}`)
     .digest("base64url");
 
@@ -57,10 +58,12 @@ export function verifySessionToken(token: string | null | undefined): AdminSessi
   if (parts.length !== 3) return null;
 
   const [header, data, signature] = parts;
+  const secret = getSessionSecret();
+  if (!secret) return null;
 
   // Verify HMAC signature
   const expectedSignature = crypto
-    .createHmac("sha256", getSessionSecret())
+    .createHmac("sha256", secret)
     .update(`${header}.${data}`)
     .digest("base64url");
 
@@ -73,10 +76,12 @@ export function verifySessionToken(token: string | null | undefined): AdminSessi
   }
 
   try {
+    const headerData = JSON.parse(Buffer.from(header, "base64url").toString("utf8")) as { alg?: string; typ?: string };
+    if (headerData.alg !== "HS256" || headerData.typ !== "JWT") return null;
     const payload = JSON.parse(Buffer.from(data, "base64url").toString("utf8")) as AdminSessionPayload;
     const now = Math.floor(Date.now() / 1000);
 
-    if (payload.exp && payload.exp < now) {
+    if (!payload.email || !["SUPER_ADMIN", "AUCTIONEER"].includes(payload.role) || !payload.leagueId || !Number.isFinite(payload.exp) || payload.exp <= now) {
       return null; // Expired
     }
 
@@ -157,28 +162,15 @@ export function clearAdminSessionCookie(res: NextResponse): void {
  * Validates configured administrator credentials
  */
 export function validateAdminCredentials(email: string, password: string): boolean {
-  const configuredEmail = (process.env.ADMIN_EMAIL || "admin@ntlcricket.com").trim().toLowerCase();
-  const configuredPassword = process.env.ADMIN_PASSWORD || "Admin@NTL2026";
+  const configuredEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  const configuredPassword = process.env.ADMIN_PASSWORD;
+  if (!configuredEmail || !configuredPassword) return false;
 
   const cleanEmail = email.trim().toLowerCase();
-  const emailMatch =
-    cleanEmail === configuredEmail ||
-    (!process.env.ADMIN_EMAIL &&
-      (cleanEmail === "commissioner@ntlcricket.com" || cleanEmail === "admin@ntlcricket.com"));
-
-  // In production, demo placeholder passwords ("••••••••••••") must NEVER be accepted
-  if (process.env.NODE_ENV === "production" && password === "••••••••••••") {
-    return false;
-  }
-
-  // Check demo placeholder strictly in local non-production development environments
-  const effectivePassword =
-    password === "••••••••••••" && process.env.NODE_ENV === "development"
-      ? configuredPassword
-      : password;
+  const emailMatch = cleanEmail === configuredEmail;
 
   // Constant time comparison for password
-  const passBuf = Buffer.from(effectivePassword);
+  const passBuf = Buffer.from(password);
   const expectedBuf = Buffer.from(configuredPassword);
   const passwordMatch =
     passBuf.length === expectedBuf.length && crypto.timingSafeEqual(passBuf, expectedBuf);
